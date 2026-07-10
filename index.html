@@ -671,7 +671,7 @@
       await loadColumnsFor(targetTableId);
       mergedConfig = mergeConfig(tableColumns, null);
     } else {
-      const rows = document.querySelectorAll('#cfgList .cfg-row');
+      const rows = document.querySelectorAll('#cfgList .cfg-row[data-col]');
       const newConfig = Array.from(rows).map(row => {
         const filterParentSel = row.querySelector('.cfg-filter-parent');
         const filterLinkSel = row.querySelector('.cfg-filter-link');
@@ -941,7 +941,10 @@
       if (!Number.isNaN(num)) {
         let opts = {};
         try { opts = JSON.parse(widgetOptionsStr || '{}'); } catch (e) {}
-        if (opts.numberFormat === 'percent') {
+        // Grist stocke le mode d'affichage numérique sous la clé "numMode" (ex. "percent",
+        // "currency", "scientific"). On vérifie aussi "numberFormat" par sécurité au cas où.
+        const mode = opts.numMode || opts.numberFormat;
+        if (mode === 'percent') {
           const decimals = typeof opts.decimals === 'number' ? opts.decimals : 0;
           return (num * 100).toFixed(decimals) + '%';
         }
@@ -951,10 +954,13 @@
     return String(raw);
   }
 
-  // Construit le HTML affiché dans le bloc d'aperçu d'un champ formule. Si la valeur
-  // textuelle contient plusieurs éléments séparés par des virgules (ex. une liste de
-  // projets "Projet 1, Projet 2, Projet 3"), chaque élément est affiché sur sa propre
-  // ligne au lieu d'un texte à plat, pour rester lisible.
+  // Construit le HTML affiché dans le bloc d'aperçu d'un champ formule. Gère deux cas :
+  // - Une liste Grist native (RefList/ChoiceList), représentée en interne par
+  //   ["L", élément1, élément2, ...] : on retire ce marqueur "L" avant affichage.
+  // - Un texte "à plat" contenant plusieurs éléments séparés par des virgules
+  //   (ex. "Projet 1, Projet 2, Projet 3").
+  // Dans les deux cas, si plusieurs éléments sont trouvés, chacun s'affiche sur sa
+  // propre ligne au lieu d'un texte continu, pour rester lisible.
   function renderFormulaPreviewHtml(raw, type, widgetOptionsStr, placeholder) {
     if (raw === null || raw === undefined || raw === '') {
       return `<span class="formula-preview-placeholder">${escapeHtml(placeholder)}</span>`;
@@ -962,11 +968,21 @@
     if (type === 'Numeric' || type === 'Int') {
       return escapeHtml(formatPreviewValue(raw, type, widgetOptionsStr));
     }
-    const items = String(raw).split(',').map(s => s.trim()).filter(s => s !== '');
+
+    let items;
+    if (Array.isArray(raw)) {
+      // Marqueur de liste Grist : ["L", v1, v2, ...] -> on retire le "L" de tête.
+      const values = (raw[0] === 'L') ? raw.slice(1) : raw;
+      items = values.map(v => String(v).trim()).filter(v => v !== '');
+    } else {
+      items = String(raw).split(',').map(s => s.trim()).filter(s => s !== '');
+    }
+
     if (items.length > 1) {
       return '<ul class="formula-preview-list">' + items.map(it => `<li>${escapeHtml(it)}</li>`).join('') + '</ul>';
     }
-    return escapeHtml(String(raw));
+    if (items.length === 1) return escapeHtml(items[0]);
+    return `<span class="formula-preview-placeholder">${escapeHtml(placeholder)}</span>`;
   }
 
   // Branche l'aperçu en direct d'un champ formule simple ($Ref.SousChamp) : dès que le
