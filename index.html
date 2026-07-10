@@ -62,6 +62,7 @@
   .checkbox-row { display: flex; align-items: center; gap: 8px; }
   .checkbox-row input { width: auto; }
   .formula-hint { font-weight: 400; color: var(--muted); font-size: 12px; }
+  .field-comment { font-size: 12px; color: var(--muted); margin: -8px 0 6px; line-height: 1.4; }
   button.primary {
     margin-top: 8px;
     padding: 11px;
@@ -126,6 +127,7 @@
   .cfg-row .order-input { width: 56px; }
   .cfg-actions { display: flex; gap: 10px; margin-top: 16px; }
   .cfg-col-name { font-size: 12px; color: var(--muted); }
+  .cfg-comment { margin-top: 6px; font-size: 12px; }
   .cfg-filter {
     margin-top: 8px;
     padding-top: 8px;
@@ -497,6 +499,7 @@
         visibleCol: col.visibleCol,
         isFormula: col.isFormula,
         formula: col.formula || '',
+        comment: saved && saved.comment ? saved.comment : '',
         defaultLabel: col.label,
         label: (saved && saved.label) ? saved.label : col.label,
         included: saved ? saved.included !== false : true,
@@ -540,6 +543,7 @@
         <div>
           <input type="text" class="cfg-label" value="${escapeHtml(c.label)}" />
           <div class="cfg-col-name">${c.colId} · ${c.type}${c.isFormula ? ' · <strong>formule (lecture seule)</strong>' : ''}</div>
+          <input type="text" class="cfg-comment" value="${escapeHtml(c.comment || '')}" placeholder="Commentaire affiché sous ce champ (facultatif)" />
           ${filterBlock}
         </div>
         <label style="display:flex;align-items:center;gap:4px;font-weight:400;font-size:12px;">
@@ -599,6 +603,7 @@
           colId: row.dataset.col,
           included: row.querySelector('.cfg-included').checked,
           label: row.querySelector('.cfg-label').value.trim(),
+          comment: row.querySelector('.cfg-comment').value.trim(),
           required: row.querySelector('.cfg-required').checked,
           order: parseInt(row.querySelector('.cfg-order').value, 10) || 0,
           filterParentColId: filterParentSel ? (filterParentSel.value || null) : null,
@@ -685,6 +690,11 @@
     }
   }
 
+  // Affiche le commentaire/aide facultatif configuré pour un champ, sous son libellé.
+  function commentHtml(col) {
+    return col.comment ? `<div class="field-comment">${escapeHtml(col.comment)}</div>` : '';
+  }
+
   async function renderField(col) {
     const id = 'f_' + col.colId;
     const type = col.type;
@@ -697,11 +707,12 @@
     // jusqu'à l'enregistrement (la valeur n'existe pas encore avant la création de la ligne).
     if (col.isFormula) {
       const hasPreview = !!formulaPreviewInfo[col.colId];
-      const hint = hasPreview ? "(aperçu — valeur définitive calculée à l'enregistrement)" : "(calculé automatiquement à l'enregistrement)";
+      const hint = hasPreview ? '' : "(calculé automatiquement à l'enregistrement)";
       const placeholder = hasPreview ? 'Se remplit après sélection du champ lié' : 'Rempli automatiquement après envoi';
       return `
         <div>
-          <label for="${id}">${col.label} <span class="formula-hint">${hint}</span></label>
+          <label for="${id}">${col.label}${hint ? ` <span class="formula-hint">${hint}</span>` : ''}</label>
+          ${commentHtml(col)}
           <input type="text" id="${id}" data-col="${col.colId}" data-formula="1" disabled
             placeholder="${placeholder}" />
         </div>`;
@@ -712,13 +723,15 @@
         <div class="checkbox-row">
           <input type="checkbox" id="${id}" data-col="${col.colId}" data-type="${type}" />
           <label for="${id}" style="margin:0;">${col.label}</label>
-        </div>`;
+        </div>
+        ${commentHtml(col)}`;
     }
 
     if (type === 'Attachments') {
       return `
         <div>
           <label for="${id}">${col.label}${reqMark}</label>
+          ${commentHtml(col)}
           <input type="file" id="${id}" data-col="${col.colId}" data-type="${type}" multiple ${reqAttr} />
         </div>`;
     }
@@ -730,6 +743,7 @@
       return `
         <div>
           <label for="${id}">${col.label}${reqMark}</label>
+          ${commentHtml(col)}
           <div class="combo" data-col="${col.colId}">
             <input type="text" class="combo-input" id="${id}" data-col="${col.colId}"
               placeholder="Rechercher…" autocomplete="off" />
@@ -754,6 +768,7 @@
       return `
         <div>
           <label for="${id}">${col.label}${reqMark}</label>
+          ${commentHtml(col)}
           <div class="combo" data-col="${col.colId}">
             <input type="text" class="combo-input" id="${id}" data-col="${col.colId}"
               placeholder="Rechercher…" autocomplete="off" />
@@ -774,6 +789,7 @@
     return `
       <div>
         <label for="${id}">${col.label}${reqMark}</label>
+        ${commentHtml(col)}
         <input type="${inputType}" id="${id}" data-col="${col.colId}" data-type="${type}"
           ${step ? `step="${step}"` : ''} ${reqAttr} />
       </div>`;
@@ -819,6 +835,26 @@
     return options;
   }
 
+  // Applique le format d'affichage Grist (pourcentage, nombre de décimales) à une valeur
+  // numérique brute, en se basant sur les options de la colonne formule elle-même
+  // (c'est elle qui porte le format d'affichage, ex. "70%" au lieu de "0.7").
+  function formatPreviewValue(raw, type, widgetOptionsStr) {
+    if (raw === null || raw === undefined || raw === '') return '';
+    if (type === 'Numeric' || type === 'Int') {
+      const num = Number(raw);
+      if (!Number.isNaN(num)) {
+        let opts = {};
+        try { opts = JSON.parse(widgetOptionsStr || '{}'); } catch (e) {}
+        if (opts.numberFormat === 'percent') {
+          const decimals = typeof opts.decimals === 'number' ? opts.decimals : 0;
+          return (num * 100).toFixed(decimals) + '%';
+        }
+        if (typeof opts.decimals === 'number') return num.toFixed(opts.decimals);
+      }
+    }
+    return String(raw);
+  }
+
   // Branche l'aperçu en direct d'un champ formule simple ($Ref.SousChamp) : dès que le
   // champ Référence dont il dépend change, on va chercher la valeur du sous-champ
   // directement dans les données déjà chargées de la table référencée (refOptionsCache),
@@ -838,9 +874,8 @@
       }
       const targetId = typeof refValue === 'string' ? parseInt(refValue, 10) : refValue;
       const idx = data.id.indexOf(targetId);
-      el.value = idx !== -1 && data[info.subColId][idx] !== null && data[info.subColId][idx] !== undefined
-        ? String(data[info.subColId][idx])
-        : '';
+      const raw = idx !== -1 ? data[info.subColId][idx] : null;
+      el.value = formatPreviewValue(raw, col.type, col.widgetOptions);
     };
 
     formulaCallbacks[col.colId](); // état initial (généralement vide tant que rien n'est sélectionné)
