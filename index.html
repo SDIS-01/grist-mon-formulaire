@@ -237,6 +237,8 @@
   let dependencyInfo = {};    // colId enfant -> { parentColId, linkColId, targetTable }
   let fieldDependents = {};   // colId parent -> [colId enfant, ...]
   let dependencyCallbacks = {}; // colId enfant -> fonction à appeler quand son parent change
+  let formulaPreviewInfo = {}; // colId formule -> { refColId, subColId, targetTable } (détection simple $Ref.SousChamp)
+  let formulaCallbacks = {};   // colId formule -> fonction de mise à jour de l'aperçu
 
   document.addEventListener('click', (e) => {
     document.querySelectorAll('.combo-list.open').forEach(listEl => {
@@ -362,6 +364,7 @@
         widgetOptions: allDocColumns.widgetOptions[i] || '',
         visibleCol: allDocColumns.visibleCol[i] || 0,
         isFormula: !!allDocColumns.isFormula[i],
+        formula: allDocColumns.formula ? (allDocColumns.formula[i] || '') : '',
       });
     }
     tableColumns = rows;
@@ -417,6 +420,27 @@
     }
   }
 
+  // Détecte, parmi les champs formule affichés, ceux qui sont une simple recopie d'une
+  // valeur de la ligne référencée par un champ Référence du formulaire (formule du type
+  // "$MonChampReference.SousChamp"). Pour ceux-là uniquement, on peut afficher un aperçu
+  // en direct dès que la référence est sélectionnée. Les formules plus complexes
+  // (calculs, conditions, agrégats...) ne sont pas reproduites : trop risqué de les
+  // interpréter à moitié, le champ reste grisé/vide comme avant.
+  function computeFormulaPreviews(included) {
+    formulaPreviewInfo = {};
+    for (const col of included) {
+      if (!col.isFormula || !col.formula) continue;
+      const m = col.formula.trim().match(/^\$([A-Za-z_]\w*)\.([A-Za-z_]\w*)$/);
+      if (!m) continue; // formule pas au format simple "$Champ.SousChamp" -> pas d'aperçu
+      const [, refColId, subColId] = m;
+      const refField = included.find(f => f.colId === refColId && (f.type.startsWith('Ref:') || f.type.startsWith('RefList:')));
+      if (!refField || refField.type.startsWith('RefList:')) continue; // aperçu géré seulement pour une Référence simple
+      formulaPreviewInfo[col.colId] = { refColId, subColId, targetTable: refField.type.split(':')[1] };
+      if (!fieldDependents[refColId]) fieldDependents[refColId] = [];
+      fieldDependents[refColId].push(col.colId);
+    }
+  }
+
   // Valeur brute actuelle d'un champ, quel que soit son type (combo ou saisie libre),
   // utilisée pour comparer au champ de liaison de la table référencée.
   function getFieldRawValue(colId) {
@@ -435,10 +459,11 @@
   }
 
   // Prévient tous les champs enfants d'un champ parent que sa valeur vient de changer,
-  // pour qu'ils rafraîchissent leurs options et invalident une sélection devenue incohérente.
+  // pour qu'ils rafraîchissent leurs options (filtres en cascade) ou leur aperçu (formules).
   function notifyDependents(parentColId) {
     (fieldDependents[parentColId] || []).forEach(childColId => {
       if (dependencyCallbacks[childColId]) dependencyCallbacks[childColId]();
+      if (formulaCallbacks[childColId]) formulaCallbacks[childColId]();
     });
   }
 
@@ -471,6 +496,7 @@
         widgetOptions: col.widgetOptions,
         visibleCol: col.visibleCol,
         isFormula: col.isFormula,
+        formula: col.formula || '',
         defaultLabel: col.label,
         label: (saved && saved.label) ? saved.label : col.label,
         included: saved ? saved.included !== false : true,
@@ -610,6 +636,7 @@
     formEl.innerHTML = '<div class="empty-state">Chargement…</div>';
 
     computeDependencies(included);
+    computeFormulaPreviews(included);
 
     const fieldsHtml = [];
     for (const col of included) {
@@ -622,6 +649,10 @@
     included
       .filter(col => !col.isFormula && (col.type.startsWith('Ref:') || col.type.startsWith('RefList:') || col.type === 'Choice' || col.type === 'ChoiceList'))
       .forEach(col => setupCombobox(col, col.type.startsWith('RefList:') || col.type === 'ChoiceList'));
+
+    // Champs formule pour lesquels un aperçu en direct est possible (recopie simple
+    // depuis une référence) : on branche leur mise à jour dès que la référence change.
+    included.filter(col => col.isFormula).forEach(setupFormulaPreview);
 
     // Les champs "parents" qui ne sont pas des combos (Texte, Numérique, Date, etc.)
     // doivent aussi déclencher le rafraîchissement de leurs champs enfants.
@@ -661,14 +692,18 @@
     const reqMark = col.required ? ' <span class="req">*</span>' : '';
 
     // Colonne formule : affichage informatif, non modifiable, non envoyée.
-    // Important : la valeur n'existe pas encore tant que la ligne n'est pas créée,
-    // donc ce champ reste vide (grisé) pendant la saisie.
+    // Si un aperçu simple est possible (recopie directe depuis une référence), le champ
+    // se remplit dès que la référence est sélectionnée. Sinon, il reste vide/grisé
+    // jusqu'à l'enregistrement (la valeur n'existe pas encore avant la création de la ligne).
     if (col.isFormula) {
+      const hasPreview = !!formulaPreviewInfo[col.colId];
+      const hint = hasPreview ? "(aperçu — valeur définitive calculée à l'enregistrement)" : "(calculé automatiquement à l'enregistrement)";
+      const placeholder = hasPreview ? 'Se remplit après sélection du champ lié' : 'Rempli automatiquement après envoi';
       return `
         <div>
-          <label for="${id}">${col.label} <span class="formula-hint">(calculé automatiquement à l'enregistrement)</span></label>
+          <label for="${id}">${col.label} <span class="formula-hint">${hint}</span></label>
           <input type="text" id="${id}" data-col="${col.colId}" data-formula="1" disabled
-            placeholder="Rempli automatiquement après envoi" />
+            placeholder="${placeholder}" />
         </div>`;
     }
 
@@ -782,6 +817,33 @@
     }
     options.sort((a, b) => a.label.localeCompare(b.label, 'fr', { sensitivity: 'base' }));
     return options;
+  }
+
+  // Branche l'aperçu en direct d'un champ formule simple ($Ref.SousChamp) : dès que le
+  // champ Référence dont il dépend change, on va chercher la valeur du sous-champ
+  // directement dans les données déjà chargées de la table référencée (refOptionsCache),
+  // sans réinterpréter la formule elle-même.
+  function setupFormulaPreview(col) {
+    const info = formulaPreviewInfo[col.colId];
+    if (!info) return;
+    const el = document.getElementById('f_' + col.colId);
+    if (!el) return;
+
+    formulaCallbacks[col.colId] = () => {
+      const refValue = getFieldRawValue(info.refColId);
+      const data = refOptionsCache[info.targetTable];
+      if (refValue === null || refValue === undefined || refValue === '' || !data || !data[info.subColId]) {
+        el.value = '';
+        return;
+      }
+      const targetId = typeof refValue === 'string' ? parseInt(refValue, 10) : refValue;
+      const idx = data.id.indexOf(targetId);
+      el.value = idx !== -1 && data[info.subColId][idx] !== null && data[info.subColId][idx] !== undefined
+        ? String(data[info.subColId][idx])
+        : '';
+    };
+
+    formulaCallbacks[col.colId](); // état initial (généralement vide tant que rien n'est sélectionné)
   }
 
   function setupCombobox(col, isList) {
