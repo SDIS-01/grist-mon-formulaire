@@ -222,6 +222,10 @@
   let currentOptions = null;
   let comboState = {};        // colId -> option sélectionnée (Ref) ou tableau (RefList)
   let comboOptionsCache = {}; // colId -> options triées disponibles pour le combobox
+  let docTablesMeta = null;   // cache de _grist_Tables (toutes les tables du document)
+  let dependencyInfo = {};    // colId enfant -> { parentColId, linkColId, targetTable }
+  let fieldDependents = {};   // colId parent -> [colId enfant, ...]
+  let dependencyCallbacks = {}; // colId enfant -> fonction à appeler quand son parent change
 
   document.addEventListener('click', (e) => {
     document.querySelectorAll('.combo-list.open').forEach(listEl => {
@@ -327,10 +331,10 @@
   // ---------- Chargement des colonnes ----------
 
   async function loadColumnsFor(tableId) {
-    const tables = await grist.docApi.fetchTable('_grist_Tables');
-    const tableIdx = tables.tableId.indexOf(tableId);
+    docTablesMeta = await grist.docApi.fetchTable('_grist_Tables');
+    const tableIdx = docTablesMeta.tableId.indexOf(tableId);
     if (tableIdx === -1) throw new Error('Table "' + tableId + '" introuvable.');
-    const tableRef = tables.id[tableIdx];
+    const tableRef = docTablesMeta.id[tableIdx];
 
     allDocColumns = await grist.docApi.fetchTable('_grist_Tables_column');
 
@@ -350,6 +354,65 @@
       });
     }
     tableColumns = rows;
+  }
+
+  // Retourne la liste des colId d'une table quelconque du document (utilisé pour détecter
+  // les colonnes en cascade, indépendamment de la table cible du formulaire).
+  function getColumnIdsForTable(tableId) {
+    if (!docTablesMeta || !allDocColumns) return [];
+    const idx = docTablesMeta.tableId.indexOf(tableId);
+    if (idx === -1) return [];
+    const tableRef = docTablesMeta.id[idx];
+    const ids = [];
+    for (let i = 0; i < allDocColumns.id.length; i++) {
+      if (allDocColumns.parentId[i] === tableRef) ids.push(allDocColumns.colId[i]);
+    }
+    return ids;
+  }
+
+  // Détecte automatiquement les champs Référence "enfants" dont la table cible possède
+  // une colonne de même nom qu'un autre champ visible du formulaire : ce dernier devient
+  // le champ "parent" qui filtre les options de l'enfant (listes déroulantes en cascade).
+  function computeDependencies(included) {
+    dependencyInfo = {};
+    fieldDependents = {};
+    for (const col of included) {
+      if (col.isFormula) continue;
+      if (!(col.type.startsWith('Ref:') || col.type.startsWith('RefList:'))) continue;
+      const targetTable = col.type.split(':')[1];
+      const targetColIds = getColumnIdsForTable(targetTable);
+      const parent = included.find(other => other.colId !== col.colId && targetColIds.includes(other.colId));
+      if (parent) {
+        dependencyInfo[col.colId] = { parentColId: parent.colId, linkColId: parent.colId, targetTable };
+        if (!fieldDependents[parent.colId]) fieldDependents[parent.colId] = [];
+        fieldDependents[parent.colId].push(col.colId);
+      }
+    }
+  }
+
+  // Valeur brute actuelle d'un champ, quel que soit son type (combo ou saisie libre),
+  // utilisée pour comparer au champ de liaison de la table référencée.
+  function getFieldRawValue(colId) {
+    const field = mergedConfig.find(c => c.colId === colId);
+    if (!field) return null;
+    const isCombo = field.type.startsWith('Ref:') || field.type.startsWith('RefList:') ||
+      field.type === 'Choice' || field.type === 'ChoiceList';
+    if (isCombo) {
+      const state = comboState[colId];
+      if (Array.isArray(state)) return null; // liste multiple : filtrage non géré ici
+      return state ? state.value : null;
+    }
+    const el = document.getElementById('f_' + colId);
+    if (!el) return null;
+    return el.value === '' ? null : el.value;
+  }
+
+  // Prévient tous les champs enfants d'un champ parent que sa valeur vient de changer,
+  // pour qu'ils rafraîchissent leurs options et invalident une sélection devenue incohérente.
+  function notifyDependents(parentColId) {
+    (fieldDependents[parentColId] || []).forEach(childColId => {
+      if (dependencyCallbacks[childColId]) dependencyCallbacks[childColId]();
+    });
   }
 
   function mergeConfig(columns, savedConfig) {
@@ -464,6 +527,8 @@
 
     formEl.innerHTML = '<div class="empty-state">Chargement…</div>';
 
+    computeDependencies(included);
+
     const fieldsHtml = [];
     for (const col of included) {
       fieldsHtml.push(await renderField(col));
@@ -475,6 +540,19 @@
     included
       .filter(col => !col.isFormula && (col.type.startsWith('Ref:') || col.type.startsWith('RefList:') || col.type === 'Choice' || col.type === 'ChoiceList'))
       .forEach(col => setupCombobox(col, col.type.startsWith('RefList:') || col.type === 'ChoiceList'));
+
+    // Les champs "parents" qui ne sont pas des combos (Texte, Numérique, Date, etc.)
+    // doivent aussi déclencher le rafraîchissement de leurs champs enfants.
+    Object.keys(fieldDependents).forEach(parentColId => {
+      const parentField = mergedConfig.find(c => c.colId === parentColId);
+      if (!parentField) return;
+      const isCombo = parentField.type.startsWith('Ref:') || parentField.type.startsWith('RefList:') ||
+        parentField.type === 'Choice' || parentField.type === 'ChoiceList';
+      if (!isCombo) {
+        const el = document.getElementById('f_' + parentColId);
+        if (el) el.addEventListener('input', () => notifyDependents(parentColId));
+      }
+    });
 
     const skipped = config.filter(c => !c.included);
     excludedNote.textContent = skipped.length
@@ -585,6 +663,11 @@
       if (idx !== -1) displayColId = allDocColumns.colId[idx];
     }
 
+    // Si ce champ dépend d'un autre champ du formulaire (cascade), on récupère aussi
+    // la valeur brute de la colonne de liaison pour chaque ligne, afin de pouvoir filtrer.
+    const dep = dependencyInfo[col.colId];
+    const linkColId = dep ? dep.linkColId : null;
+
     const options = [];
     for (let i = 0; i < data.id.length; i++) {
       let label;
@@ -597,7 +680,11 @@
         // Pas de "Colonne à afficher" définie dans Grist : on garde l'identifiant comme repli
         label = `#${data.id[i]}`;
       }
-      options.push({ value: data.id[i], label });
+      const opt = { value: data.id[i], label };
+      if (linkColId && data[linkColId]) {
+        opt.filterRaw = data[linkColId][i];
+      }
+      options.push(opt);
     }
     options.sort((a, b) => a.label.localeCompare(b.label, 'fr', { sensitivity: 'base' }));
     return options;
@@ -606,6 +693,7 @@
   function setupCombobox(col, isList) {
     const colId = col.colId;
     const options = comboOptionsCache[colId] || [];
+    const dep = dependencyInfo[colId];
     const wrapper = document.querySelector(`.combo[data-col="${colId}"]`);
     if (!wrapper) return;
     const input = wrapper.querySelector('.combo-input');
@@ -614,6 +702,15 @@
     const tagsEl = isList ? document.querySelector(`.combo-tags[data-col="${colId}"]`) : null;
 
     comboState[colId] = isList ? [] : null;
+
+    // Sous-ensemble des options actuellement disponibles compte tenu du champ parent
+    // (si le parent n'a pas encore de valeur, on montre tout, sans filtrer).
+    function getAvailableOptions() {
+      if (!dep) return options;
+      const parentValue = getFieldRawValue(dep.parentColId);
+      if (parentValue === null || parentValue === undefined || parentValue === '') return options;
+      return options.filter(o => o.filterRaw !== undefined && o.filterRaw !== null && String(o.filterRaw) === String(parentValue));
+    }
 
     function isSelected(opt) {
       if (isList) return comboState[colId].some(o => String(o.value) === String(opt.value));
@@ -639,17 +736,21 @@
           comboState[colId] = comboState[colId].filter(o => String(o.value) !== val);
           renderTags();
           updateProxy();
+          notifyDependents(colId);
         });
       });
     }
 
     function renderList(query) {
+      const avail = getAvailableOptions();
       const q = query.trim().toLowerCase();
-      const filtered = options.filter(o =>
+      const filtered = avail.filter(o =>
         o.label.toLowerCase().includes(q) && !(isList && isSelected(o))
       );
       if (!filtered.length) {
-        listEl.innerHTML = '<div class="combo-empty">Aucun résultat</div>';
+        listEl.innerHTML = dep && getFieldRawValue(dep.parentColId)
+          ? '<div class="combo-empty">Aucune tâche liée à ce choix</div>'
+          : '<div class="combo-empty">Aucun résultat</div>';
       } else {
         listEl.innerHTML = filtered.map(o =>
           `<div class="combo-option" data-value="${o.value}">${escapeHtml(o.label)}</div>`
@@ -658,7 +759,7 @@
           el.addEventListener('mousedown', (e) => {
             e.preventDefault(); // garde le focus pour que le clic s'enregistre (utile aussi au tactile)
             const val = el.getAttribute('data-value');
-            const opt = options.find(o => String(o.value) === val);
+            const opt = avail.find(o => String(o.value) === val);
             if (!opt) return;
             if (isList) {
               if (!isSelected(opt)) comboState[colId].push(opt);
@@ -671,6 +772,7 @@
               listEl.classList.remove('open');
             }
             updateProxy();
+            notifyDependents(colId);
           });
         });
       }
@@ -682,9 +784,29 @@
       if (!isList && comboState[colId]) {
         comboState[colId] = null;
         updateProxy();
+        notifyDependents(colId);
       }
       renderList(input.value);
     });
+
+    // Si ce champ dépend d'un parent, on l'enregistre pour être rafraîchi/invalidé
+    // dès que la valeur du parent change.
+    if (dep) {
+      dependencyCallbacks[colId] = () => {
+        const avail = getAvailableOptions();
+        if (isList) {
+          const before = comboState[colId].length;
+          comboState[colId] = comboState[colId].filter(o => avail.some(a => String(a.value) === String(o.value)));
+          if (comboState[colId].length !== before) renderTags();
+        } else if (comboState[colId] && !avail.some(o => String(o.value) === String(comboState[colId].value))) {
+          comboState[colId] = null;
+          input.value = '';
+        }
+        updateProxy();
+        if (listEl.classList.contains('open')) renderList(input.value);
+        notifyDependents(colId); // propage en cascade si ce champ a lui-même des enfants
+      };
+    }
 
     updateProxy();
     renderTags();
