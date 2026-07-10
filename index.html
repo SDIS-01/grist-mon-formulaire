@@ -110,6 +110,12 @@
     margin-bottom: 8px;
     background: white;
   }
+  #cfgList {
+    max-height: 60vh;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    padding-right: 4px;
+  }
   .cfg-row input[type="text"] { width: 100%; }
   .cfg-row .order-input { width: 56px; }
   .cfg-actions { display: flex; gap: 10px; margin-top: 16px; }
@@ -184,6 +190,9 @@
     <div class="cfg-block">
       <label for="cfgTableSelect">Table cible</label>
       <select id="cfgTableSelect"></select>
+      <div style="margin-top:10px;">
+        <button type="button" class="secondary" id="cfgRefresh">🔄 Actualiser les colonnes</button>
+      </div>
     </div>
     <div class="subtitle">Cochez les champs à afficher, renommez-les si besoin, marquez-les obligatoires et fixez leur ordre.</div>
     <div id="cfgList"></div>
@@ -234,6 +243,22 @@
   document.getElementById('gearBtn').addEventListener('click', showConfig);
   document.getElementById('cfgCancel').addEventListener('click', hideConfig);
   document.getElementById('cfgSave').addEventListener('click', saveConfig);
+  document.getElementById('cfgRefresh').addEventListener('click', async () => {
+    const btn = document.getElementById('cfgRefresh');
+    btn.disabled = true;
+    btn.textContent = '⏳ Actualisation…';
+    try {
+      await loadColumnsFor(targetTableId);
+      mergedConfig = mergeConfig(tableColumns, currentOptions.formConfig);
+      renderConfigList();
+    } catch (err) {
+      console.error(err);
+      alert('Erreur lors de l’actualisation : ' + (err.message || err));
+    } finally {
+      btn.disabled = false;
+      btn.textContent = '🔄 Actualiser les colonnes';
+    }
+  });
   document.getElementById('setupSave').addEventListener('click', saveSetup);
 
   async function bootstrap() {
@@ -323,7 +348,10 @@
   function mergeConfig(columns, savedConfig) {
     const savedMap = {};
     (savedConfig || []).forEach(c => { savedMap[c.colId] = c; });
-    return columns.map((col, idx) => {
+    const alphabetical = [...columns].sort((a, b) =>
+      a.label.localeCompare(b.label, 'fr', { sensitivity: 'base' })
+    );
+    return alphabetical.map((col, idx) => {
       const saved = savedMap[col.colId];
       return {
         colId: col.colId,
