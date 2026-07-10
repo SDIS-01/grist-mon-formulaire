@@ -842,9 +842,13 @@
         o.label.toLowerCase().includes(q) && !(isList && isSelected(o))
       );
       if (!filtered.length) {
-        listEl.innerHTML = dep && getFieldRawValue(dep.parentColId)
-          ? '<div class="combo-empty">Aucune tâche liée à ce choix</div>'
-          : '<div class="combo-empty">Aucun résultat</div>';
+        const parentValue = dep ? getFieldRawValue(dep.parentColId) : null;
+        if (dep && parentValue !== null && parentValue !== undefined && parentValue !== '') {
+          const withLink = options.filter(o => o.filterRaw !== undefined && o.filterRaw !== null).length;
+          listEl.innerHTML = `<div class="combo-empty">Aucune ligne liée à ce choix.<br>Diagnostic : valeur comparée = "${escapeHtml(String(parentValue))}" · ${withLink} ligne(s) sur ${options.length} ont une colonne de liaison renseignée dans ${escapeHtml(dep.targetTable)}.</div>`;
+        } else {
+          listEl.innerHTML = '<div class="combo-empty">Aucun résultat</div>';
+        }
       } else {
         listEl.innerHTML = filtered.map(o =>
           `<div class="combo-option" data-value="${o.value}">${escapeHtml(o.label)}</div>`
