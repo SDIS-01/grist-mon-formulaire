@@ -62,7 +62,39 @@
   .checkbox-row { display: flex; align-items: center; gap: 8px; }
   .checkbox-row input { width: auto; }
   .formula-hint { font-weight: 400; color: var(--muted); font-size: 12px; }
+  .formula-preview {
+    width: 100%;
+    min-height: 20px;
+    padding: 9px 10px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    font-size: 14px;
+    font-family: inherit;
+    background: #f1f5f9;
+    color: var(--text);
+  }
+  .formula-preview-placeholder { color: var(--muted); }
+  .formula-preview-list {
+    margin: 0;
+    padding-left: 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .formula-preview-list li { line-height: 1.4; }
   .field-comment { font-size: 12px; color: var(--muted); margin: -8px 0 6px; line-height: 1.4; }
+  .form-section {
+    margin: 10px 0 -4px;
+    padding-bottom: 6px;
+    border-bottom: 2px solid var(--accent);
+  }
+  .form-section h2 {
+    margin: 0;
+    font-size: 15px;
+    font-weight: 700;
+    color: var(--accent-dark);
+  }
+  .form-section:first-child { margin-top: 0; }
   button.primary {
     margin-top: 8px;
     padding: 11px;
@@ -128,6 +160,8 @@
   .cfg-actions { display: flex; gap: 10px; margin-top: 16px; }
   .cfg-col-name { font-size: 12px; color: var(--muted); }
   .cfg-comment { margin-top: 6px; font-size: 12px; }
+  .cfg-section-row { background: #f0fdf4; border-color: #bbf7d0; }
+  .cfg-section-title { font-weight: 600; }
   .cfg-filter {
     margin-top: 8px;
     padding-top: 8px;
@@ -214,6 +248,9 @@
       </div>
     </div>
     <div class="subtitle">Cochez les champs à afficher, renommez-les si besoin, marquez-les obligatoires et fixez leur ordre. Les colonnes formule sont affichées en lecture seule (grisées) dans le formulaire.</div>
+    <div style="margin-bottom:10px;">
+      <button type="button" class="secondary" id="cfgAddSection">📖 Ajouter un chapitre</button>
+    </div>
     <div id="cfgList"></div>
     <div class="cfg-actions">
       <button class="primary" id="cfgSave">Enregistrer</button>
@@ -231,6 +268,7 @@
   let allDocColumns = null;   // raw _grist_Tables_column fetch, whole doc
   let tableColumns = [];      // column meta for targetTableId
   let mergedConfig = [];
+  let formSections = []; // chapitres : [{ id, title, order }]
   let refOptionsCache = {};
   let currentOptions = null;
   let comboState = {};        // colId -> option sélectionnée (Ref) ou tableau (RefList)
@@ -285,6 +323,7 @@
     }
   });
   document.getElementById('setupSave').addEventListener('click', saveSetup);
+  document.getElementById('cfgAddSection').addEventListener('click', addSection);
 
   async function bootstrap() {
     allTableIds = await grist.docApi.listTables();
@@ -307,6 +346,7 @@
     hideSetup();
     await loadColumnsFor(targetTableId);
     mergedConfig = mergeConfig(tableColumns, currentOptions.formConfig);
+    formSections = currentOptions.formSections || [];
     document.getElementById('pageTitle').textContent = '📋 ' + targetTableId;
     document.getElementById('pageSubtitle').textContent = 'Formulaire de saisie pour la table ' + targetTableId + '.';
 
@@ -338,6 +378,7 @@
     hideSetup();
     await loadColumnsFor(targetTableId);
     mergedConfig = mergeConfig(tableColumns, currentOptions.formConfig);
+    formSections = currentOptions.formSections || [];
     document.getElementById('pageTitle').textContent = '📋 ' + targetTableId;
     document.getElementById('pageSubtitle').textContent = 'Formulaire de saisie pour la table ' + targetTableId + '.';
     await renderForm(mergedConfig);
@@ -533,8 +574,24 @@
 
   function renderConfigList() {
     const list = document.getElementById('cfgList');
-    const sorted = [...mergedConfig].sort((a, b) => a.order - b.order);
-    list.innerHTML = sorted.map(c => {
+    const fieldItems = mergedConfig.map(c => ({ kind: 'field', order: c.order, data: c }));
+    const sectionItems = formSections.map(s => ({ kind: 'section', order: s.order, data: s }));
+    const sorted = [...fieldItems, ...sectionItems].sort((a, b) => a.order - b.order);
+    list.innerHTML = sorted.map(item => {
+      if (item.kind === 'section') {
+        const s = item.data;
+        return `
+      <div class="cfg-row cfg-section-row" data-section="${s.id}">
+        <div style="font-size:18px;">📖</div>
+        <div>
+          <input type="text" class="cfg-section-title" value="${escapeHtml(s.title)}" placeholder="Titre du chapitre" />
+          <div class="cfg-col-name">Chapitre</div>
+        </div>
+        <button type="button" class="secondary cfg-section-delete" title="Supprimer ce chapitre" style="padding:6px 10px;">🗑️</button>
+        <input type="number" class="cfg-order order-input" value="${s.order}" />
+      </div>`;
+      }
+      const c = item.data;
       const isRef = c.type.startsWith('Ref:') || c.type.startsWith('RefList:');
       const filterBlock = (isRef && !c.isFormula) ? renderFilterBlock(c) : '';
       return `
@@ -553,6 +610,22 @@
       </div>
     `;
     }).join('');
+
+    list.querySelectorAll('.cfg-section-delete').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const row = btn.closest('.cfg-section-row');
+        const sectionId = row.dataset.section;
+        formSections = formSections.filter(s => s.id !== sectionId);
+        renderConfigList();
+      });
+    });
+  }
+
+  function addSection() {
+    const allOrders = [...mergedConfig.map(c => c.order), ...formSections.map(s => s.order)];
+    const maxOrder = allOrders.length ? Math.max(...allOrders) : 0;
+    formSections.push({ id: 'sec_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6), title: 'Nouveau chapitre', order: maxOrder + 1 });
+    renderConfigList();
   }
 
   // Bloc "filtre en cascade" affiché sous un champ Référence/RéférenceListe dans le panneau ⚙️ :
@@ -589,8 +662,11 @@
     if (tableChanged) {
       await grist.setOption('tableId', chosenTable);
       await grist.setOption('formConfig', null);
+      await grist.setOption('formSections', null);
       currentOptions.tableId = chosenTable;
       currentOptions.formConfig = null;
+      currentOptions.formSections = null;
+      formSections = [];
       targetTableId = chosenTable;
       await loadColumnsFor(targetTableId);
       mergedConfig = mergeConfig(tableColumns, null);
@@ -610,8 +686,17 @@
           filterLinkColId: filterLinkSel ? (filterLinkSel.value || null) : null,
         };
       });
+      const sectionRows = document.querySelectorAll('#cfgList .cfg-section-row');
+      const newSections = Array.from(sectionRows).map(row => ({
+        id: row.dataset.section,
+        title: row.querySelector('.cfg-section-title').value.trim() || 'Chapitre',
+        order: parseInt(row.querySelector('.cfg-order').value, 10) || 0,
+      }));
       await grist.setOption('formConfig', newConfig);
+      await grist.setOption('formSections', newSections);
       currentOptions.formConfig = newConfig;
+      currentOptions.formSections = newSections;
+      formSections = newSections;
       mergedConfig = mergeConfig(tableColumns, newConfig);
     }
 
@@ -643,9 +728,19 @@
     computeDependencies(included);
     computeFormulaPreviews(included);
 
+    // Fusionne les champs et les chapitres dans un seul flux, trié par ordre commun,
+    // pour que les titres de section s'intercalent au bon endroit dans le formulaire.
+    const fieldItems = included.map(c => ({ kind: 'field', order: c.order, col: c }));
+    const sectionItems = formSections.map(s => ({ kind: 'section', order: s.order, section: s }));
+    const stream = [...fieldItems, ...sectionItems].sort((a, b) => a.order - b.order);
+
     const fieldsHtml = [];
-    for (const col of included) {
-      fieldsHtml.push(await renderField(col));
+    for (const item of stream) {
+      if (item.kind === 'section') {
+        fieldsHtml.push(`<div class="form-section"><h2>${escapeHtml(item.section.title)}</h2></div>`);
+      } else {
+        fieldsHtml.push(await renderField(item.col));
+      }
     }
 
     formEl.innerHTML = fieldsHtml.join('') + '<button type="submit" class="primary">Envoyer</button>';
@@ -713,8 +808,9 @@
         <div>
           <label for="${id}">${col.label}${hint ? ` <span class="formula-hint">${hint}</span>` : ''}</label>
           ${commentHtml(col)}
-          <input type="text" id="${id}" data-col="${col.colId}" data-formula="1" disabled
-            placeholder="${placeholder}" />
+          <div class="formula-preview" id="${id}" data-col="${col.colId}" data-formula="1" data-placeholder="${escapeHtml(placeholder)}">
+            <span class="formula-preview-placeholder">${escapeHtml(placeholder)}</span>
+          </div>
         </div>`;
     }
 
@@ -855,6 +951,24 @@
     return String(raw);
   }
 
+  // Construit le HTML affiché dans le bloc d'aperçu d'un champ formule. Si la valeur
+  // textuelle contient plusieurs éléments séparés par des virgules (ex. une liste de
+  // projets "Projet 1, Projet 2, Projet 3"), chaque élément est affiché sur sa propre
+  // ligne au lieu d'un texte à plat, pour rester lisible.
+  function renderFormulaPreviewHtml(raw, type, widgetOptionsStr, placeholder) {
+    if (raw === null || raw === undefined || raw === '') {
+      return `<span class="formula-preview-placeholder">${escapeHtml(placeholder)}</span>`;
+    }
+    if (type === 'Numeric' || type === 'Int') {
+      return escapeHtml(formatPreviewValue(raw, type, widgetOptionsStr));
+    }
+    const items = String(raw).split(',').map(s => s.trim()).filter(s => s !== '');
+    if (items.length > 1) {
+      return '<ul class="formula-preview-list">' + items.map(it => `<li>${escapeHtml(it)}</li>`).join('') + '</ul>';
+    }
+    return escapeHtml(String(raw));
+  }
+
   // Branche l'aperçu en direct d'un champ formule simple ($Ref.SousChamp) : dès que le
   // champ Référence dont il dépend change, on va chercher la valeur du sous-champ
   // directement dans les données déjà chargées de la table référencée (refOptionsCache),
@@ -864,18 +978,19 @@
     if (!info) return;
     const el = document.getElementById('f_' + col.colId);
     if (!el) return;
+    const placeholder = el.getAttribute('data-placeholder') || '';
 
     formulaCallbacks[col.colId] = () => {
       const refValue = getFieldRawValue(info.refColId);
       const data = refOptionsCache[info.targetTable];
       if (refValue === null || refValue === undefined || refValue === '' || !data || !data[info.subColId]) {
-        el.value = '';
+        el.innerHTML = `<span class="formula-preview-placeholder">${escapeHtml(placeholder)}</span>`;
         return;
       }
       const targetId = typeof refValue === 'string' ? parseInt(refValue, 10) : refValue;
       const idx = data.id.indexOf(targetId);
       const raw = idx !== -1 ? data[info.subColId][idx] : null;
-      el.value = formatPreviewValue(raw, col.type, col.widgetOptions);
+      el.innerHTML = renderFormulaPreviewHtml(raw, col.type, col.widgetOptions, placeholder);
     };
 
     formulaCallbacks[col.colId](); // état initial (généralement vide tant que rien n'est sélectionné)
