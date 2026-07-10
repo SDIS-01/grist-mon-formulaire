@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Formulaire Grist — Donnee_Formulaire</title>
+<title>Formulaire Grist</title>
 <script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
 <style>
   :root {
@@ -83,14 +83,22 @@
     border-radius: 8px;
     font-size: 13px;
     display: none;
+    white-space: pre-wrap;
   }
   .msg.success { display: block; background: #dcfce7; color: #166534; }
   .msg.error { display: block; background: #fee2e2; color: #991b1b; }
   .note { font-size: 12px; color: var(--muted); margin-top: 16px; line-height: 1.5; }
   .empty-state { color: var(--muted); font-size: 14px; padding: 20px 0; text-align: center; }
 
-  /* Config panel */
-  #configPanel { display: none; }
+  /* Config / setup panel */
+  #configPanel, #setupPanel { display: none; }
+  .cfg-block {
+    padding: 14px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: white;
+    margin-bottom: 16px;
+  }
   .cfg-row {
     display: grid;
     grid-template-columns: auto 1fr auto auto;
@@ -112,10 +120,20 @@
 <div class="wrap">
 
   <div class="header">
-    <h1>📋 Donnee_Formulaire</h1>
+    <h1 id="pageTitle">📋 Formulaire</h1>
     <button class="gear" id="gearBtn" title="Configurer les champs">⚙️</button>
   </div>
-  <div class="subtitle">Formulaire de saisie pour la table <code>Donnee_Formulaire</code>.</div>
+  <div class="subtitle" id="pageSubtitle">Chargement…</div>
+
+  <div id="setupPanel">
+    <div class="cfg-block">
+      <label for="setupTableSelect">Table cible introuvable ou non définie. Choisissez-la :</label>
+      <select id="setupTableSelect"></select>
+    </div>
+    <div class="cfg-actions">
+      <button class="primary" id="setupSave">Valider cette table</button>
+    </div>
+  </div>
 
   <div id="formView">
     <form id="form"></form>
@@ -124,6 +142,10 @@
   </div>
 
   <div id="configPanel">
+    <div class="cfg-block">
+      <label for="cfgTableSelect">Table cible</label>
+      <select id="cfgTableSelect"></select>
+    </div>
     <div class="subtitle">Cochez les champs à afficher, renommez-les si besoin, marquez-les obligatoires et fixez leur ordre.</div>
     <div id="cfgList"></div>
     <div class="cfg-actions">
@@ -135,12 +157,15 @@
 </div>
 
 <script>
-  const FIXED_TABLE_ID = 'Donnee_Formulaire';
+  const GUESS_NAME = 'Donnee_Formulaire'; // utilisé seulement pour une détection automatique au premier lancement
 
+  let allTableIds = [];
+  let targetTableId = null;
   let allDocColumns = null;   // raw _grist_Tables_column fetch, whole doc
-  let tableColumns = [];      // column meta for FIXED_TABLE_ID
-  let mergedConfig = [];      // tableColumns merged with saved config
-  let refOptionsCache = {};   // targetTableId -> {id:[...], colId:[...]}
+  let tableColumns = [];      // column meta for targetTableId
+  let mergedConfig = [];
+  let refOptionsCache = {};
+  let currentOptions = null;
 
   grist.ready({
     requiredAccess: 'full',
@@ -148,30 +173,84 @@
   });
 
   grist.onOptions(async (options) => {
-    const savedConfig = (options && options.formConfig) || null;
-    if (!tableColumns.length) {
-      await loadColumns();
-    }
-    mergedConfig = mergeConfig(tableColumns, savedConfig);
-    if (document.getElementById('configPanel').style.display !== 'block') {
-      renderForm(mergedConfig);
+    currentOptions = options || {};
+    try {
+      await bootstrap();
+    } catch (err) {
+      console.error(err);
+      document.getElementById('form').innerHTML =
+        '<div class="empty-state">Erreur : ' + escapeHtml(err.message || String(err)) + '</div>';
     }
   });
 
   document.getElementById('gearBtn').addEventListener('click', showConfig);
   document.getElementById('cfgCancel').addEventListener('click', hideConfig);
   document.getElementById('cfgSave').addEventListener('click', saveConfig);
+  document.getElementById('setupSave').addEventListener('click', saveSetup);
 
-  async function loadColumns() {
-    const formEl = document.getElementById('form');
-    formEl.innerHTML = '<div class="empty-state">Chargement…</div>';
+  async function bootstrap() {
+    allTableIds = await grist.docApi.listTables();
 
-    const tables = await grist.docApi.fetchTable('_grist_Tables');
-    const tableIdx = tables.tableId.indexOf(FIXED_TABLE_ID);
-    if (tableIdx === -1) {
-      formEl.innerHTML = `<div class="empty-state">La table "${FIXED_TABLE_ID}" est introuvable dans ce document.</div>`;
-      throw new Error('table not found');
+    const saved = currentOptions.tableId;
+    if (saved && allTableIds.includes(saved)) {
+      targetTableId = saved;
+    } else {
+      // tentative de détection automatique (insensible aux accents/casse) au tout premier lancement
+      const normalize = s => s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+      const guess = allTableIds.find(t => normalize(t) === normalize(GUESS_NAME));
+      targetTableId = guess || null;
     }
+
+    if (!targetTableId) {
+      showSetup();
+      return;
+    }
+
+    hideSetup();
+    await loadColumnsFor(targetTableId);
+    mergedConfig = mergeConfig(tableColumns, currentOptions.formConfig);
+    document.getElementById('pageTitle').textContent = '📋 ' + targetTableId;
+    document.getElementById('pageSubtitle').textContent = 'Formulaire de saisie pour la table ' + targetTableId + '.';
+
+    if (document.getElementById('configPanel').style.display !== 'block') {
+      await renderForm(mergedConfig);
+    }
+  }
+
+  // ---------- Setup (première sélection de table) ----------
+
+  function showSetup() {
+    document.getElementById('formView').style.display = 'none';
+    document.getElementById('configPanel').style.display = 'none';
+    document.getElementById('setupPanel').style.display = 'block';
+    const sel = document.getElementById('setupTableSelect');
+    sel.innerHTML = allTableIds.map(t => `<option value="${t}">${t}</option>`).join('');
+  }
+
+  function hideSetup() {
+    document.getElementById('setupPanel').style.display = 'none';
+    document.getElementById('formView').style.display = 'block';
+  }
+
+  async function saveSetup() {
+    const chosen = document.getElementById('setupTableSelect').value;
+    await grist.setOption('tableId', chosen);
+    currentOptions.tableId = chosen;
+    targetTableId = chosen;
+    hideSetup();
+    await loadColumnsFor(targetTableId);
+    mergedConfig = mergeConfig(tableColumns, currentOptions.formConfig);
+    document.getElementById('pageTitle').textContent = '📋 ' + targetTableId;
+    document.getElementById('pageSubtitle').textContent = 'Formulaire de saisie pour la table ' + targetTableId + '.';
+    await renderForm(mergedConfig);
+  }
+
+  // ---------- Chargement des colonnes ----------
+
+  async function loadColumnsFor(tableId) {
+    const tables = await grist.docApi.fetchTable('_grist_Tables');
+    const tableIdx = tables.tableId.indexOf(tableId);
+    if (tableIdx === -1) throw new Error('Table "' + tableId + '" introuvable.');
     const tableRef = tables.id[tableIdx];
 
     allDocColumns = await grist.docApi.fetchTable('_grist_Tables_column');
@@ -215,8 +294,14 @@
   // ---------- Config panel ----------
 
   function showConfig() {
+    if (!allTableIds.length) return; // pas encore prêt
     document.getElementById('formView').style.display = 'none';
+    document.getElementById('setupPanel').style.display = 'none';
     document.getElementById('configPanel').style.display = 'block';
+
+    const sel = document.getElementById('cfgTableSelect');
+    sel.innerHTML = allTableIds.map(t => `<option value="${t}" ${t === targetTableId ? 'selected' : ''}>${t}</option>`).join('');
+
     renderConfigList();
   }
 
@@ -232,7 +317,7 @@
       <div class="cfg-row" data-col="${c.colId}">
         <input type="checkbox" class="cfg-included" ${c.included ? 'checked' : ''} />
         <div>
-          <input type="text" class="cfg-label" value="${escapeHtmlAttr(c.label)}" />
+          <input type="text" class="cfg-label" value="${escapeHtml(c.label)}" />
           <div class="cfg-col-name">${c.colId} · ${c.type}</div>
         </div>
         <label style="display:flex;align-items:center;gap:4px;font-weight:400;font-size:12px;">
@@ -244,16 +329,33 @@
   }
 
   async function saveConfig() {
-    const rows = document.querySelectorAll('#cfgList .cfg-row');
-    const newConfig = Array.from(rows).map(row => ({
-      colId: row.dataset.col,
-      included: row.querySelector('.cfg-included').checked,
-      label: row.querySelector('.cfg-label').value.trim(),
-      required: row.querySelector('.cfg-required').checked,
-      order: parseInt(row.querySelector('.cfg-order').value, 10) || 0,
-    }));
-    await grist.setOption('formConfig', newConfig);
-    mergedConfig = mergeConfig(tableColumns, newConfig);
+    const chosenTable = document.getElementById('cfgTableSelect').value;
+    const tableChanged = chosenTable !== targetTableId;
+
+    if (tableChanged) {
+      await grist.setOption('tableId', chosenTable);
+      await grist.setOption('formConfig', null);
+      currentOptions.tableId = chosenTable;
+      currentOptions.formConfig = null;
+      targetTableId = chosenTable;
+      await loadColumnsFor(targetTableId);
+      mergedConfig = mergeConfig(tableColumns, null);
+    } else {
+      const rows = document.querySelectorAll('#cfgList .cfg-row');
+      const newConfig = Array.from(rows).map(row => ({
+        colId: row.dataset.col,
+        included: row.querySelector('.cfg-included').checked,
+        label: row.querySelector('.cfg-label').value.trim(),
+        required: row.querySelector('.cfg-required').checked,
+        order: parseInt(row.querySelector('.cfg-order').value, 10) || 0,
+      }));
+      await grist.setOption('formConfig', newConfig);
+      currentOptions.formConfig = newConfig;
+      mergedConfig = mergeConfig(tableColumns, newConfig);
+    }
+
+    document.getElementById('pageTitle').textContent = '📋 ' + targetTableId;
+    document.getElementById('pageSubtitle').textContent = 'Formulaire de saisie pour la table ' + targetTableId + '.';
     hideConfig();
     await renderForm(mergedConfig);
   }
@@ -360,11 +462,10 @@
 
   async function getRefOptions(col) {
     const targetTable = col.type.split(':')[1];
-    const cacheKey = targetTable;
-    if (!refOptionsCache[cacheKey]) {
-      refOptionsCache[cacheKey] = await grist.docApi.fetchTable(targetTable);
+    if (!refOptionsCache[targetTable]) {
+      refOptionsCache[targetTable] = await grist.docApi.fetchTable(targetTable);
     }
-    const data = refOptionsCache[cacheKey];
+    const data = refOptionsCache[targetTable];
 
     let displayColId = null;
     if (col.visibleCol && allDocColumns) {
@@ -385,7 +486,6 @@
       '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
     }[c]));
   }
-  function escapeHtmlAttr(str) { return escapeHtml(str); }
 
   // ---------- Submit ----------
 
@@ -460,7 +560,7 @@
         if (value !== null) fields[col.colId] = value;
       }
 
-      const table = grist.getTable(FIXED_TABLE_ID);
+      const table = grist.getTable(targetTableId);
       await table.create({ fields });
 
       showMsg('success', '✓ Enregistrement ajouté avec succès.');
