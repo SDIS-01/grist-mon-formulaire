@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Formulaire Grist</title>
+<title>Formulaire Grist — Donnee_Formulaire</title>
 <script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
 <style>
   :root {
@@ -22,20 +22,23 @@
     color: var(--text);
     padding: 24px;
   }
-  .wrap { max-width: 520px; margin: 0 auto; }
-  h1 { font-size: 18px; margin: 0 0 4px; }
-  .subtitle { color: var(--muted); font-size: 13px; margin-bottom: 20px; }
-  .table-select {
-    width: 100%;
-    padding: 8px 10px;
+  .wrap { max-width: 560px; margin: 0 auto; }
+  .header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px; }
+  h1 { font-size: 18px; margin: 0; }
+  .gear {
     border: 1px solid var(--border);
-    border-radius: 8px;
-    margin-bottom: 20px;
-    font-size: 14px;
     background: white;
+    border-radius: 8px;
+    width: 32px; height: 32px;
+    font-size: 15px;
+    cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
   }
+  .gear:hover { background: #f1f5f9; }
+  .subtitle { color: var(--muted); font-size: 13px; margin-bottom: 20px; }
   form { display: flex; flex-direction: column; gap: 14px; }
   label { font-size: 13px; font-weight: 600; margin-bottom: 4px; display: block; }
+  .req { color: #dc2626; }
   input, select, textarea {
     width: 100%;
     padding: 9px 10px;
@@ -45,6 +48,7 @@
     font-family: inherit;
     background: white;
   }
+  select[multiple] { min-height: 100px; }
   input:focus, select:focus, textarea:focus {
     outline: none;
     border-color: var(--accent);
@@ -52,7 +56,7 @@
   }
   .checkbox-row { display: flex; align-items: center; gap: 8px; }
   .checkbox-row input { width: auto; }
-  button {
+  button.primary {
     margin-top: 8px;
     padding: 11px;
     background: var(--accent);
@@ -63,8 +67,16 @@
     font-weight: 600;
     cursor: pointer;
   }
-  button:hover { background: var(--accent-dark); }
-  button:disabled { background: #94a3b8; cursor: not-allowed; }
+  button.primary:hover { background: var(--accent-dark); }
+  button.primary:disabled { background: #94a3b8; cursor: not-allowed; }
+  button.secondary {
+    padding: 9px 14px;
+    background: white;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    font-size: 14px;
+    cursor: pointer;
+  }
   .msg {
     margin-top: 14px;
     padding: 10px 12px;
@@ -76,108 +88,212 @@
   .msg.error { display: block; background: #fee2e2; color: #991b1b; }
   .note { font-size: 12px; color: var(--muted); margin-top: 16px; line-height: 1.5; }
   .empty-state { color: var(--muted); font-size: 14px; padding: 20px 0; text-align: center; }
+
+  /* Config panel */
+  #configPanel { display: none; }
+  .cfg-row {
+    display: grid;
+    grid-template-columns: auto 1fr auto auto;
+    gap: 10px;
+    align-items: center;
+    padding: 10px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    margin-bottom: 8px;
+    background: white;
+  }
+  .cfg-row input[type="text"] { width: 100%; }
+  .cfg-row .order-input { width: 56px; }
+  .cfg-actions { display: flex; gap: 10px; margin-top: 16px; }
+  .cfg-col-name { font-size: 12px; color: var(--muted); }
 </style>
 </head>
 <body>
 <div class="wrap">
-  <h1>📋 Formulaire Grist</h1>
-  <div class="subtitle">Les champs sont générés automatiquement depuis les colonnes de la table.</div>
 
-  <select id="tableSelect" class="table-select"></select>
+  <div class="header">
+    <h1>📋 Donnee_Formulaire</h1>
+    <button class="gear" id="gearBtn" title="Configurer les champs">⚙️</button>
+  </div>
+  <div class="subtitle">Formulaire de saisie pour la table <code>Donnee_Formulaire</code>.</div>
 
-  <form id="form"></form>
-  <div id="msg" class="msg"></div>
-  <div id="excludedNote" class="note"></div>
+  <div id="formView">
+    <form id="form"></form>
+    <div id="msg" class="msg"></div>
+    <div id="excludedNote" class="note"></div>
+  </div>
+
+  <div id="configPanel">
+    <div class="subtitle">Cochez les champs à afficher, renommez-les si besoin, marquez-les obligatoires et fixez leur ordre.</div>
+    <div id="cfgList"></div>
+    <div class="cfg-actions">
+      <button class="primary" id="cfgSave">Enregistrer</button>
+      <button class="secondary" id="cfgCancel">Annuler</button>
+    </div>
+  </div>
+
 </div>
 
 <script>
-  let currentTableId = null;
-  let currentColumns = [];
+  const FIXED_TABLE_ID = 'Donnee_Formulaire';
+
+  let allDocColumns = null;   // raw _grist_Tables_column fetch, whole doc
+  let tableColumns = [];      // column meta for FIXED_TABLE_ID
+  let mergedConfig = [];      // tableColumns merged with saved config
+  let refOptionsCache = {};   // targetTableId -> {id:[...], colId:[...]}
 
   grist.ready({
     requiredAccess: 'full',
+    onEditOptions: () => showConfig(),
   });
 
-  async function init() {
-    const tableIds = await grist.docApi.listTables();
-    const select = document.getElementById('tableSelect');
-    select.innerHTML = tableIds.map(t => `<option value="${t}">${t}</option>`).join('');
-
-    const saved = await grist.getOption('tableId');
-    if (saved && tableIds.includes(saved)) {
-      select.value = saved;
+  grist.onOptions(async (options) => {
+    const savedConfig = (options && options.formConfig) || null;
+    if (!tableColumns.length) {
+      await loadColumns();
     }
-
-    select.addEventListener('change', async () => {
-      await grist.setOption('tableId', select.value);
-      await loadForm(select.value);
-    });
-
-    if (select.value) {
-      await loadForm(select.value);
+    mergedConfig = mergeConfig(tableColumns, savedConfig);
+    if (document.getElementById('configPanel').style.display !== 'block') {
+      renderForm(mergedConfig);
     }
+  });
+
+  document.getElementById('gearBtn').addEventListener('click', showConfig);
+  document.getElementById('cfgCancel').addEventListener('click', hideConfig);
+  document.getElementById('cfgSave').addEventListener('click', saveConfig);
+
+  async function loadColumns() {
+    const formEl = document.getElementById('form');
+    formEl.innerHTML = '<div class="empty-state">Chargement…</div>';
+
+    const tables = await grist.docApi.fetchTable('_grist_Tables');
+    const tableIdx = tables.tableId.indexOf(FIXED_TABLE_ID);
+    if (tableIdx === -1) {
+      formEl.innerHTML = `<div class="empty-state">La table "${FIXED_TABLE_ID}" est introuvable dans ce document.</div>`;
+      throw new Error('table not found');
+    }
+    const tableRef = tables.id[tableIdx];
+
+    allDocColumns = await grist.docApi.fetchTable('_grist_Tables_column');
+
+    const rows = [];
+    for (let i = 0; i < allDocColumns.id.length; i++) {
+      if (allDocColumns.parentId[i] !== tableRef) continue;
+      if (allDocColumns.isFormula[i]) continue;
+      const colId = allDocColumns.colId[i];
+      if (colId === 'manualSort' || colId.startsWith('gristHelper_')) continue;
+      rows.push({
+        colId,
+        label: allDocColumns.label[i] || colId,
+        type: allDocColumns.type[i] || 'Text',
+        widgetOptions: allDocColumns.widgetOptions[i] || '',
+        visibleCol: allDocColumns.visibleCol[i] || 0,
+      });
+    }
+    tableColumns = rows;
   }
 
-  async function loadForm(tableId) {
-    currentTableId = tableId;
+  function mergeConfig(columns, savedConfig) {
+    const savedMap = {};
+    (savedConfig || []).forEach(c => { savedMap[c.colId] = c; });
+    return columns.map((col, idx) => {
+      const saved = savedMap[col.colId];
+      return {
+        colId: col.colId,
+        type: col.type,
+        widgetOptions: col.widgetOptions,
+        visibleCol: col.visibleCol,
+        defaultLabel: col.label,
+        label: (saved && saved.label) ? saved.label : col.label,
+        included: saved ? saved.included !== false : true,
+        required: saved ? !!saved.required : false,
+        order: (saved && typeof saved.order === 'number') ? saved.order : idx,
+      };
+    });
+  }
+
+  // ---------- Config panel ----------
+
+  function showConfig() {
+    document.getElementById('formView').style.display = 'none';
+    document.getElementById('configPanel').style.display = 'block';
+    renderConfigList();
+  }
+
+  function hideConfig() {
+    document.getElementById('configPanel').style.display = 'none';
+    document.getElementById('formView').style.display = 'block';
+  }
+
+  function renderConfigList() {
+    const list = document.getElementById('cfgList');
+    const sorted = [...mergedConfig].sort((a, b) => a.order - b.order);
+    list.innerHTML = sorted.map(c => `
+      <div class="cfg-row" data-col="${c.colId}">
+        <input type="checkbox" class="cfg-included" ${c.included ? 'checked' : ''} />
+        <div>
+          <input type="text" class="cfg-label" value="${escapeHtmlAttr(c.label)}" />
+          <div class="cfg-col-name">${c.colId} · ${c.type}</div>
+        </div>
+        <label style="display:flex;align-items:center;gap:4px;font-weight:400;font-size:12px;">
+          <input type="checkbox" class="cfg-required" ${c.required ? 'checked' : ''} /> obligatoire
+        </label>
+        <input type="number" class="cfg-order order-input" value="${c.order}" />
+      </div>
+    `).join('');
+  }
+
+  async function saveConfig() {
+    const rows = document.querySelectorAll('#cfgList .cfg-row');
+    const newConfig = Array.from(rows).map(row => ({
+      colId: row.dataset.col,
+      included: row.querySelector('.cfg-included').checked,
+      label: row.querySelector('.cfg-label').value.trim(),
+      required: row.querySelector('.cfg-required').checked,
+      order: parseInt(row.querySelector('.cfg-order').value, 10) || 0,
+    }));
+    await grist.setOption('formConfig', newConfig);
+    mergedConfig = mergeConfig(tableColumns, newConfig);
+    hideConfig();
+    await renderForm(mergedConfig);
+  }
+
+  // ---------- Form rendering ----------
+
+  async function renderForm(config) {
     const formEl = document.getElementById('form');
-    formEl.innerHTML = '<div class="empty-state">Chargement des colonnes…</div>';
-    document.getElementById('excludedNote').textContent = '';
+    const excludedNote = document.getElementById('excludedNote');
     hideMsg();
 
-    try {
-      const tables = await grist.docApi.fetchTable('_grist_Tables');
-      const tableIdx = tables.tableId.indexOf(tableId);
-      if (tableIdx === -1) throw new Error('Table introuvable');
-      const tableRef = tables.id[tableIdx];
+    const included = config.filter(c => c.included).sort((a, b) => a.order - b.order);
 
-      const cols = await grist.docApi.fetchTable('_grist_Tables_column');
-      const rows = [];
-      for (let i = 0; i < cols.id.length; i++) {
-        if (cols.parentId[i] !== tableRef) continue;
-        if (cols.isFormula[i]) continue;
-        const colId = cols.colId[i];
-        if (colId === 'manualSort' || colId.startsWith('gristHelper_')) continue;
-        rows.push({
-          colId,
-          label: cols.label[i] || colId,
-          type: cols.type[i] || 'Text',
-          widgetOptions: cols.widgetOptions[i] || '',
-        });
-      }
-
-      currentColumns = rows.filter(c => !/^(Ref|RefList|Attachments)/.test(c.type));
-      const excluded = rows.filter(c => /^(Ref|RefList|Attachments)/.test(c.type));
-
-      if (excluded.length) {
-        document.getElementById('excludedNote').textContent =
-          'Colonnes non incluses (références ou pièces jointes, non gérées par ce formulaire) : ' +
-          excluded.map(c => c.label).join(', ');
-      }
-
-      renderForm(currentColumns);
-    } catch (err) {
-      formEl.innerHTML = '<div class="empty-state">Erreur de chargement des colonnes.</div>';
-      console.error(err);
-    }
-  }
-
-  function renderForm(columns) {
-    const formEl = document.getElementById('form');
-    if (!columns.length) {
-      formEl.innerHTML = '<div class="empty-state">Aucune colonne modifiable trouvée dans cette table.</div>';
+    if (!included.length) {
+      formEl.innerHTML = '<div class="empty-state">Aucun champ activé. Cliquez sur ⚙️ pour en configurer.</div>';
+      excludedNote.textContent = '';
       return;
     }
 
-    formEl.innerHTML = columns.map(col => renderField(col)).join('') +
-      '<button type="submit">Envoyer</button>';
+    formEl.innerHTML = '<div class="empty-state">Chargement…</div>';
 
+    const fieldsHtml = [];
+    for (const col of included) {
+      fieldsHtml.push(await renderField(col));
+    }
+
+    formEl.innerHTML = fieldsHtml.join('') + '<button type="submit" class="primary">Envoyer</button>';
     formEl.onsubmit = handleSubmit;
+
+    const skipped = config.filter(c => !c.included);
+    excludedNote.textContent = skipped.length
+      ? 'Champs masqués (configurables via ⚙️) : ' + skipped.map(c => c.label).join(', ')
+      : '';
   }
 
-  function renderField(col) {
+  async function renderField(col) {
     const id = 'f_' + col.colId;
     const type = col.type;
+    const reqAttr = col.required ? 'required' : '';
+    const reqMark = col.required ? ' <span class="req">*</span>' : '';
 
     if (type === 'Bool') {
       return `
@@ -187,35 +303,81 @@
         </div>`;
     }
 
-    if (type === 'Choice') {
+    if (type === 'Attachments') {
+      return `
+        <div>
+          <label for="${id}">${col.label}${reqMark}</label>
+          <input type="file" id="${id}" data-col="${col.colId}" data-type="${type}" multiple ${reqAttr} />
+        </div>`;
+    }
+
+    if (type.startsWith('Ref:') || type.startsWith('RefList:')) {
+      const options = await getRefOptions(col);
+      const isList = type.startsWith('RefList:');
+      const optHtml = (isList ? [] : ['<option value="">— choisir —</option>'])
+        .concat(options.map(o => `<option value="${o.value}">${escapeHtml(o.label)}</option>`));
+      return `
+        <div>
+          <label for="${id}">${col.label}${reqMark}</label>
+          <select id="${id}" data-col="${col.colId}" data-type="${type}" ${isList ? 'multiple' : ''} ${reqAttr}>
+            ${optHtml.join('')}
+          </select>
+        </div>`;
+    }
+
+    if (type === 'Choice' || type === 'ChoiceList') {
       let choices = [];
       try {
         const opts = JSON.parse(col.widgetOptions || '{}');
         choices = opts.choices || [];
       } catch (e) {}
-      const options = ['<option value="">— choisir —</option>']
+      const isList = type === 'ChoiceList';
+      const optHtml = (isList ? [] : ['<option value="">— choisir —</option>'])
         .concat(choices.map(c => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`));
       return `
         <div>
-          <label for="${id}">${col.label}</label>
-          <select id="${id}" data-col="${col.colId}" data-type="${type}">${options.join('')}</select>
+          <label for="${id}">${col.label}${reqMark}</label>
+          <select id="${id}" data-col="${col.colId}" data-type="${type}" ${isList ? 'multiple' : ''} ${reqAttr}>
+            ${optHtml.join('')}
+          </select>
         </div>`;
     }
 
     let inputType = 'text';
-    if (type === 'Numeric') inputType = 'number';
-    else if (type === 'Int') inputType = 'number';
+    let step = null;
+    if (type === 'Numeric') { inputType = 'number'; step = 'any'; }
+    else if (type === 'Int') { inputType = 'number'; step = '1'; }
     else if (type === 'Date') inputType = 'date';
     else if (type.startsWith('DateTime')) inputType = 'datetime-local';
 
-    const step = type === 'Numeric' ? 'any' : (type === 'Int' ? '1' : null);
-
     return `
       <div>
-        <label for="${id}">${col.label}</label>
+        <label for="${id}">${col.label}${reqMark}</label>
         <input type="${inputType}" id="${id}" data-col="${col.colId}" data-type="${type}"
-          ${step ? `step="${step}"` : ''} />
+          ${step ? `step="${step}"` : ''} ${reqAttr} />
       </div>`;
+  }
+
+  async function getRefOptions(col) {
+    const targetTable = col.type.split(':')[1];
+    const cacheKey = targetTable;
+    if (!refOptionsCache[cacheKey]) {
+      refOptionsCache[cacheKey] = await grist.docApi.fetchTable(targetTable);
+    }
+    const data = refOptionsCache[cacheKey];
+
+    let displayColId = null;
+    if (col.visibleCol && allDocColumns) {
+      const idx = allDocColumns.id.indexOf(col.visibleCol);
+      if (idx !== -1) displayColId = allDocColumns.colId[idx];
+    }
+
+    const options = [];
+    for (let i = 0; i < data.id.length; i++) {
+      const label = (displayColId && data[displayColId]) ? String(data[displayColId][i]) : `#${data.id[i]}`;
+      options.push({ value: data.id[i], label });
+    }
+    return options;
   }
 
   function escapeHtml(str) {
@@ -223,23 +385,67 @@
       '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
     }[c]));
   }
+  function escapeHtmlAttr(str) { return escapeHtml(str); }
+
+  // ---------- Submit ----------
+
+  async function uploadFiles(fileList) {
+    if (!fileList || !fileList.length) return null;
+    const tokenInfo = await grist.docApi.getAccessToken({ readOnly: false });
+    const formData = new FormData();
+    for (const file of fileList) formData.append('upload', file, file.name);
+    const resp = await fetch(`${tokenInfo.baseUrl}/attachments?auth=${tokenInfo.token}`, {
+      method: 'POST',
+      body: formData,
+    });
+    if (!resp.ok) throw new Error('Échec de l’envoi de la pièce jointe (' + resp.status + ')');
+    const data = await resp.json();
+    const list = Array.isArray(data) ? data : (data.attachments || []);
+    const ids = list.map(item => (item && typeof item === 'object') ? item.id : item);
+    return ids.length ? ['L', ...ids] : null;
+  }
 
   async function handleSubmit(e) {
     e.preventDefault();
-    const btn = e.target.querySelector('button');
+    const btn = e.target.querySelector('button[type="submit"]');
     btn.disabled = true;
     hideMsg();
 
     try {
+      const included = mergedConfig.filter(c => c.included);
       const fields = {};
-      currentColumns.forEach(col => {
+
+      for (const col of included) {
         const el = document.getElementById('f_' + col.colId);
         const type = col.type;
-        let value = null;
+        let value;
 
         if (type === 'Bool') {
-          value = el.checked;
-        } else if (type === 'Numeric') {
+          fields[col.colId] = el.checked;
+          continue;
+        }
+
+        if (type === 'Attachments') {
+          value = await uploadFiles(el.files);
+          if (value !== null) fields[col.colId] = value;
+          continue;
+        }
+
+        if (type.startsWith('RefList:') || type === 'ChoiceList') {
+          const selected = Array.from(el.selectedOptions).map(o => o.value);
+          if (!selected.length) continue;
+          const casted = type.startsWith('RefList:') ? selected.map(v => parseInt(v, 10)) : selected;
+          fields[col.colId] = ['L', ...casted];
+          continue;
+        }
+
+        if (type.startsWith('Ref:')) {
+          value = el.value ? parseInt(el.value, 10) : null;
+          if (value !== null) fields[col.colId] = value;
+          continue;
+        }
+
+        if (type === 'Numeric') {
           value = el.value === '' ? null : parseFloat(el.value);
         } else if (type === 'Int') {
           value = el.value === '' ? null : parseInt(el.value, 10);
@@ -251,10 +457,10 @@
           value = el.value === '' ? null : el.value;
         }
 
-        fields[col.colId] = value;
-      });
+        if (value !== null) fields[col.colId] = value;
+      }
 
-      const table = grist.getTable(currentTableId);
+      const table = grist.getTable(FIXED_TABLE_ID);
       await table.create({ fields });
 
       showMsg('success', '✓ Enregistrement ajouté avec succès.');
@@ -272,14 +478,11 @@
     msg.className = 'msg ' + type;
     msg.textContent = text;
   }
-
   function hideMsg() {
     const msg = document.getElementById('msg');
     msg.className = 'msg';
     msg.textContent = '';
   }
-
-  init();
 </script>
 </body>
 </html>
