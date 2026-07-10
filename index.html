@@ -436,8 +436,8 @@
     formEl.onsubmit = handleSubmit;
 
     included
-      .filter(col => col.type.startsWith('Ref:') || col.type.startsWith('RefList:'))
-      .forEach(col => setupCombobox(col, col.type.startsWith('RefList:')));
+      .filter(col => col.type.startsWith('Ref:') || col.type.startsWith('RefList:') || col.type === 'Choice' || col.type === 'ChoiceList')
+      .forEach(col => setupCombobox(col, col.type.startsWith('RefList:') || col.type === 'ChoiceList'));
 
     const skipped = config.filter(c => !c.included);
     excludedNote.textContent = skipped.length
@@ -490,15 +490,19 @@
         const opts = JSON.parse(col.widgetOptions || '{}');
         choices = opts.choices || [];
       } catch (e) {}
+      const options = choices.map(c => ({ value: c, label: c }));
+      comboOptionsCache[col.colId] = options;
       const isList = type === 'ChoiceList';
-      const optHtml = (isList ? [] : ['<option value="">— choisir —</option>'])
-        .concat(choices.map(c => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`));
       return `
         <div>
           <label for="${id}">${col.label}${reqMark}</label>
-          <select id="${id}" data-col="${col.colId}" data-type="${type}" ${isList ? 'multiple' : ''} ${reqAttr}>
-            ${optHtml.join('')}
-          </select>
+          <div class="combo" data-col="${col.colId}">
+            <input type="text" class="combo-input" id="${id}" data-col="${col.colId}"
+              placeholder="Rechercher…" autocomplete="off" />
+            <input type="hidden" class="combo-proxy" data-col="${col.colId}" ${reqAttr} />
+            <div class="combo-list" data-col="${col.colId}"></div>
+          </div>
+          ${isList ? `<div class="combo-tags" data-col="${col.colId}"></div>` : ''}
         </div>`;
     }
 
@@ -628,9 +632,9 @@
 
   function resetAllCombos() {
     mergedConfig
-      .filter(c => c.included && (c.type.startsWith('Ref:') || c.type.startsWith('RefList:')))
+      .filter(c => c.included && (c.type.startsWith('Ref:') || c.type.startsWith('RefList:') || c.type === 'Choice' || c.type === 'ChoiceList'))
       .forEach(col => {
-        const isList = col.type.startsWith('RefList:');
+        const isList = col.type.startsWith('RefList:') || col.type === 'ChoiceList';
         comboState[col.colId] = isList ? [] : null;
         const wrapper = document.querySelector(`.combo[data-col="${col.colId}"]`);
         if (wrapper) {
@@ -695,9 +699,16 @@
         }
 
         if (type === 'ChoiceList') {
-          const selected = Array.from(el.selectedOptions).map(o => o.value);
+          const selected = comboState[col.colId] || [];
           if (!selected.length) continue;
-          fields[col.colId] = ['L', ...selected];
+          fields[col.colId] = ['L', ...selected.map(o => o.value)];
+          continue;
+        }
+
+        if (type === 'Choice') {
+          const selected = comboState[col.colId];
+          if (!selected) continue;
+          fields[col.colId] = selected.value;
           continue;
         }
 
