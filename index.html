@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="fr">
 <head>
-<meta charset="UTF-20" />
+<meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Formulaire Grist</title>
 <script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
@@ -48,6 +48,11 @@
     font-family: inherit;
     background: white;
   }
+  input:disabled {
+    background: #f1f5f9;
+    color: var(--muted);
+    cursor: not-allowed;
+  }
   select[multiple] { min-height: 100px; }
   input:focus, select:focus, textarea:focus {
     outline: none;
@@ -56,6 +61,7 @@
   }
   .checkbox-row { display: flex; align-items: center; gap: 8px; }
   .checkbox-row input { width: auto; }
+  .formula-hint { font-weight: 400; color: var(--muted); font-size: 12px; }
   button.primary {
     margin-top: 8px;
     padding: 11px;
@@ -194,7 +200,7 @@
         <button type="button" class="secondary" id="cfgRefresh">🔄 Actualiser les colonnes</button>
       </div>
     </div>
-    <div class="subtitle">Cochez les champs à afficher, renommez-les si besoin, marquez-les obligatoires et fixez leur ordre.</div>
+    <div class="subtitle">Cochez les champs à afficher, renommez-les si besoin, marquez-les obligatoires et fixez leur ordre. Les colonnes formule sont affichées en lecture seule (grisées) dans le formulaire.</div>
     <div id="cfgList"></div>
     <div class="cfg-actions">
       <button class="primary" id="cfgSave">Enregistrer</button>
@@ -331,7 +337,7 @@
     const rows = [];
     for (let i = 0; i < allDocColumns.id.length; i++) {
       if (allDocColumns.parentId[i] !== tableRef) continue;
-      if (allDocColumns.isFormula[i]) continue;
+      // Modification : on NE saute plus les colonnes formule, on les marque simplement.
       const colId = allDocColumns.colId[i];
       if (colId === 'manualSort' || colId.startsWith('gristHelper_')) continue;
       rows.push({
@@ -340,6 +346,7 @@
         type: allDocColumns.type[i] || 'Text',
         widgetOptions: allDocColumns.widgetOptions[i] || '',
         visibleCol: allDocColumns.visibleCol[i] || 0,
+        isFormula: !!allDocColumns.isFormula[i],
       });
     }
     tableColumns = rows;
@@ -358,10 +365,12 @@
         type: col.type,
         widgetOptions: col.widgetOptions,
         visibleCol: col.visibleCol,
+        isFormula: col.isFormula,
         defaultLabel: col.label,
         label: (saved && saved.label) ? saved.label : col.label,
         included: saved ? saved.included !== false : true,
-        required: saved ? !!saved.required : false,
+        // Une colonne formule ne peut jamais être "obligatoire" (elle n'est pas saisissable)
+        required: col.isFormula ? false : (saved ? !!saved.required : false),
         order: (saved && typeof saved.order === 'number') ? saved.order : idx,
       };
     });
@@ -394,10 +403,10 @@
         <input type="checkbox" class="cfg-included" ${c.included ? 'checked' : ''} />
         <div>
           <input type="text" class="cfg-label" value="${escapeHtml(c.label)}" />
-          <div class="cfg-col-name">${c.colId} · ${c.type}</div>
+          <div class="cfg-col-name">${c.colId} · ${c.type}${c.isFormula ? ' · <strong>formule (lecture seule)</strong>' : ''}</div>
         </div>
         <label style="display:flex;align-items:center;gap:4px;font-weight:400;font-size:12px;">
-          <input type="checkbox" class="cfg-required" ${c.required ? 'checked' : ''} /> obligatoire
+          <input type="checkbox" class="cfg-required" ${c.required ? 'checked' : ''} ${c.isFormula ? 'disabled' : ''} /> obligatoire
         </label>
         <input type="number" class="cfg-order order-input" value="${c.order}" />
       </div>
@@ -464,7 +473,7 @@
     formEl.onsubmit = handleSubmit;
 
     included
-      .filter(col => col.type.startsWith('Ref:') || col.type.startsWith('RefList:') || col.type === 'Choice' || col.type === 'ChoiceList')
+      .filter(col => !col.isFormula && (col.type.startsWith('Ref:') || col.type.startsWith('RefList:') || col.type === 'Choice' || col.type === 'ChoiceList'))
       .forEach(col => setupCombobox(col, col.type.startsWith('RefList:') || col.type === 'ChoiceList'));
 
     const skipped = config.filter(c => !c.included);
@@ -478,6 +487,18 @@
     const type = col.type;
     const reqAttr = col.required ? 'required' : '';
     const reqMark = col.required ? ' <span class="req">*</span>' : '';
+
+    // Colonne formule : affichage informatif, non modifiable, non envoyée.
+    // Important : la valeur n'existe pas encore tant que la ligne n'est pas créée,
+    // donc ce champ reste vide (grisé) pendant la saisie.
+    if (col.isFormula) {
+      return `
+        <div>
+          <label for="${id}">${col.label} <span class="formula-hint">(calculé automatiquement à l'enregistrement)</span></label>
+          <input type="text" id="${id}" data-col="${col.colId}" data-formula="1" disabled
+            placeholder="Rempli automatiquement après envoi" />
+        </div>`;
+    }
 
     if (type === 'Bool') {
       return `
@@ -660,7 +681,7 @@
 
   function resetAllCombos() {
     mergedConfig
-      .filter(c => c.included && (c.type.startsWith('Ref:') || c.type.startsWith('RefList:') || c.type === 'Choice' || c.type === 'ChoiceList'))
+      .filter(c => c.included && !c.isFormula && (c.type.startsWith('Ref:') || c.type.startsWith('RefList:') || c.type === 'Choice' || c.type === 'ChoiceList'))
       .forEach(col => {
         const isList = col.type.startsWith('RefList:') || col.type === 'ChoiceList';
         comboState[col.colId] = isList ? [] : null;
@@ -707,7 +728,8 @@
     hideMsg();
 
     try {
-      const included = mergedConfig.filter(c => c.included);
+      // Les colonnes formule sont exclues de l'envoi : Grist les calcule seul.
+      const included = mergedConfig.filter(c => c.included && !c.isFormula);
       const fields = {};
 
       for (const col of included) {
