@@ -539,7 +539,9 @@
         const opts = JSON.parse(col.widgetOptions || '{}');
         choices = opts.choices || [];
       } catch (e) {}
-      const options = choices.map(c => ({ value: c, label: c }));
+      const options = choices
+        .filter(c => c !== null && c !== undefined && String(c).trim() !== '')
+        .map(c => ({ value: c, label: c }));
       comboOptionsCache[col.colId] = options;
       const isList = type === 'ChoiceList';
       return `
@@ -585,7 +587,16 @@
 
     const options = [];
     for (let i = 0; i < data.id.length; i++) {
-      const label = (displayColId && data[displayColId]) ? String(data[displayColId][i]) : `#${data.id[i]}`;
+      let label;
+      if (displayColId) {
+        const raw = data[displayColId][i];
+        // Cellule vide dans la colonne affichée -> on exclut cette ligne des options
+        if (raw === null || raw === undefined || String(raw).trim() === '') continue;
+        label = String(raw);
+      } else {
+        // Pas de "Colonne à afficher" définie dans Grist : on garde l'identifiant comme repli
+        label = `#${data.id[i]}`;
+      }
       options.push({ value: data.id[i], label });
     }
     options.sort((a, b) => a.label.localeCompare(b.label, 'fr', { sensitivity: 'base' }));
