@@ -114,6 +114,45 @@
   .cfg-row .order-input { width: 56px; }
   .cfg-actions { display: flex; gap: 10px; margin-top: 16px; }
   .cfg-col-name { font-size: 12px; color: var(--muted); }
+
+  /* Combobox recherche (colonnes Référence) */
+  .combo { position: relative; }
+  .combo-input { font-size: 16px; } /* évite le zoom auto sur iOS */
+  .combo-list {
+    display: none;
+    position: absolute;
+    top: 100%; left: 0; right: 0;
+    background: white;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    margin-top: 4px;
+    max-height: 240px;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    z-index: 50;
+    box-shadow: 0 6px 16px rgba(0,0,0,0.12);
+  }
+  .combo-list.open { display: block; }
+  .combo-option {
+    padding: 12px;
+    font-size: 14px;
+    cursor: pointer;
+  }
+  .combo-option:hover, .combo-option:active { background: #f1f5f9; }
+  .combo-empty { padding: 12px; font-size: 13px; color: var(--muted); }
+  .combo-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  .combo-tag {
+    display: flex; align-items: center; gap: 6px;
+    background: #ecfdf5; color: #065f46;
+    border: 1px solid #a7f3d0;
+    border-radius: 999px;
+    padding: 5px 10px;
+    font-size: 12px;
+  }
+  .combo-tag button {
+    border: none; background: none; color: #065f46; cursor: pointer;
+    font-size: 14px; line-height: 1; padding: 0;
+  }
 </style>
 </head>
 <body>
@@ -166,6 +205,15 @@
   let mergedConfig = [];
   let refOptionsCache = {};
   let currentOptions = null;
+  let comboState = {};        // colId -> option sélectionnée (Ref) ou tableau (RefList)
+  let comboOptionsCache = {}; // colId -> options triées disponibles pour le combobox
+
+  document.addEventListener('click', (e) => {
+    document.querySelectorAll('.combo-list.open').forEach(listEl => {
+      const wrapper = listEl.closest('.combo');
+      if (wrapper && !wrapper.contains(e.target)) listEl.classList.remove('open');
+    });
+  });
 
   grist.ready({
     requiredAccess: 'full',
@@ -366,6 +414,8 @@
     const formEl = document.getElementById('form');
     const excludedNote = document.getElementById('excludedNote');
     hideMsg();
+    comboState = {};
+    comboOptionsCache = {};
 
     const included = config.filter(c => c.included).sort((a, b) => a.order - b.order);
 
@@ -384,6 +434,10 @@
 
     formEl.innerHTML = fieldsHtml.join('') + '<button type="submit" class="primary">Envoyer</button>';
     formEl.onsubmit = handleSubmit;
+
+    included
+      .filter(col => col.type.startsWith('Ref:') || col.type.startsWith('RefList:'))
+      .forEach(col => setupCombobox(col, col.type.startsWith('RefList:')));
 
     const skipped = config.filter(c => !c.included);
     excludedNote.textContent = skipped.length
@@ -415,15 +469,18 @@
 
     if (type.startsWith('Ref:') || type.startsWith('RefList:')) {
       const options = await getRefOptions(col);
+      comboOptionsCache[col.colId] = options;
       const isList = type.startsWith('RefList:');
-      const optHtml = (isList ? [] : ['<option value="">— choisir —</option>'])
-        .concat(options.map(o => `<option value="${o.value}">${escapeHtml(o.label)}</option>`));
       return `
         <div>
           <label for="${id}">${col.label}${reqMark}</label>
-          <select id="${id}" data-col="${col.colId}" data-type="${type}" ${isList ? 'multiple' : ''} ${reqAttr}>
-            ${optHtml.join('')}
-          </select>
+          <div class="combo" data-col="${col.colId}">
+            <input type="text" class="combo-input" id="${id}" data-col="${col.colId}"
+              placeholder="Rechercher…" autocomplete="off" />
+            <input type="hidden" class="combo-proxy" data-col="${col.colId}" ${reqAttr} />
+            <div class="combo-list" data-col="${col.colId}"></div>
+          </div>
+          ${isList ? `<div class="combo-tags" data-col="${col.colId}"></div>` : ''}
         </div>`;
     }
 
@@ -478,7 +535,113 @@
       const label = (displayColId && data[displayColId]) ? String(data[displayColId][i]) : `#${data.id[i]}`;
       options.push({ value: data.id[i], label });
     }
+    options.sort((a, b) => a.label.localeCompare(b.label, 'fr', { sensitivity: 'base' }));
     return options;
+  }
+
+  function setupCombobox(col, isList) {
+    const colId = col.colId;
+    const options = comboOptionsCache[colId] || [];
+    const wrapper = document.querySelector(`.combo[data-col="${colId}"]`);
+    if (!wrapper) return;
+    const input = wrapper.querySelector('.combo-input');
+    const listEl = wrapper.querySelector('.combo-list');
+    const proxy = wrapper.querySelector('.combo-proxy');
+    const tagsEl = isList ? document.querySelector(`.combo-tags[data-col="${colId}"]`) : null;
+
+    comboState[colId] = isList ? [] : null;
+
+    function isSelected(opt) {
+      if (isList) return comboState[colId].some(o => String(o.value) === String(opt.value));
+      return comboState[colId] && String(comboState[colId].value) === String(opt.value);
+    }
+
+    function updateProxy() {
+      if (isList) {
+        proxy.value = comboState[colId].length ? 'x' : '';
+      } else {
+        proxy.value = comboState[colId] ? String(comboState[colId].value) : '';
+      }
+    }
+
+    function renderTags() {
+      if (!isList) return;
+      tagsEl.innerHTML = comboState[colId].map(o => `
+        <span class="combo-tag">${escapeHtml(o.label)} <button type="button" data-remove="${o.value}">✕</button></span>
+      `).join('');
+      tagsEl.querySelectorAll('button[data-remove]').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const val = btn.getAttribute('data-remove');
+          comboState[colId] = comboState[colId].filter(o => String(o.value) !== val);
+          renderTags();
+          updateProxy();
+        });
+      });
+    }
+
+    function renderList(query) {
+      const q = query.trim().toLowerCase();
+      const filtered = options.filter(o =>
+        o.label.toLowerCase().includes(q) && !(isList && isSelected(o))
+      );
+      if (!filtered.length) {
+        listEl.innerHTML = '<div class="combo-empty">Aucun résultat</div>';
+      } else {
+        listEl.innerHTML = filtered.map(o =>
+          `<div class="combo-option" data-value="${o.value}">${escapeHtml(o.label)}</div>`
+        ).join('');
+        listEl.querySelectorAll('.combo-option').forEach(el => {
+          el.addEventListener('mousedown', (e) => {
+            e.preventDefault(); // garde le focus pour que le clic s'enregistre (utile aussi au tactile)
+            const val = el.getAttribute('data-value');
+            const opt = options.find(o => String(o.value) === val);
+            if (!opt) return;
+            if (isList) {
+              if (!isSelected(opt)) comboState[colId].push(opt);
+              input.value = '';
+              renderTags();
+              renderList('');
+            } else {
+              comboState[colId] = opt;
+              input.value = opt.label;
+              listEl.classList.remove('open');
+            }
+            updateProxy();
+          });
+        });
+      }
+      listEl.classList.add('open');
+    }
+
+    input.addEventListener('focus', () => renderList(isList ? '' : (comboState[colId] ? '' : input.value)));
+    input.addEventListener('input', () => {
+      if (!isList && comboState[colId]) {
+        comboState[colId] = null;
+        updateProxy();
+      }
+      renderList(input.value);
+    });
+
+    updateProxy();
+    renderTags();
+  }
+
+  function resetAllCombos() {
+    mergedConfig
+      .filter(c => c.included && (c.type.startsWith('Ref:') || c.type.startsWith('RefList:')))
+      .forEach(col => {
+        const isList = col.type.startsWith('RefList:');
+        comboState[col.colId] = isList ? [] : null;
+        const wrapper = document.querySelector(`.combo[data-col="${col.colId}"]`);
+        if (wrapper) {
+          wrapper.querySelector('.combo-input').value = '';
+          wrapper.querySelector('.combo-proxy').value = '';
+        }
+        if (isList) {
+          const tagsEl = document.querySelector(`.combo-tags[data-col="${col.colId}"]`);
+          if (tagsEl) tagsEl.innerHTML = '';
+        }
+      });
   }
 
   function escapeHtml(str) {
@@ -531,17 +694,24 @@
           continue;
         }
 
-        if (type.startsWith('RefList:') || type === 'ChoiceList') {
+        if (type === 'ChoiceList') {
           const selected = Array.from(el.selectedOptions).map(o => o.value);
           if (!selected.length) continue;
-          const casted = type.startsWith('RefList:') ? selected.map(v => parseInt(v, 10)) : selected;
-          fields[col.colId] = ['L', ...casted];
+          fields[col.colId] = ['L', ...selected];
+          continue;
+        }
+
+        if (type.startsWith('RefList:')) {
+          const selected = comboState[col.colId] || [];
+          if (!selected.length) continue;
+          fields[col.colId] = ['L', ...selected.map(o => parseInt(o.value, 10))];
           continue;
         }
 
         if (type.startsWith('Ref:')) {
-          value = el.value ? parseInt(el.value, 10) : null;
-          if (value !== null) fields[col.colId] = value;
+          const selected = comboState[col.colId];
+          if (!selected) continue;
+          fields[col.colId] = parseInt(selected.value, 10);
           continue;
         }
 
@@ -565,6 +735,7 @@
 
       showMsg('success', '✓ Enregistrement ajouté avec succès.');
       e.target.reset();
+      resetAllCombos();
     } catch (err) {
       console.error(err);
       showMsg('error', 'Erreur lors de l’envoi : ' + (err.message || err));
