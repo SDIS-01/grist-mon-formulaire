@@ -126,6 +126,16 @@
   .cfg-row .order-input { width: 56px; }
   .cfg-actions { display: flex; gap: 10px; margin-top: 16px; }
   .cfg-col-name { font-size: 12px; color: var(--muted); }
+  .cfg-filter {
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px dashed var(--border);
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .cfg-filter-label { font-size: 12px; color: var(--muted); font-weight: 600; }
+  .cfg-filter select { font-size: 12px; padding: 6px 8px; }
 
   /* Combobox recherche (colonnes Référence) */
   .combo { position: relative; }
@@ -189,6 +199,7 @@
   <div id="formView">
     <form id="form"></form>
     <div id="msg" class="msg"></div>
+    <div id="cascadeNote" class="note"></div>
     <div id="excludedNote" class="note"></div>
   </div>
 
@@ -356,8 +367,8 @@
     tableColumns = rows;
   }
 
-  // Retourne la liste des colId d'une table quelconque du document (utilisé pour détecter
-  // les colonnes en cascade, indépendamment de la table cible du formulaire).
+  // Retourne la liste des colId d'une table quelconque du document (utilisé pour la suggestion
+  // automatique de filtre lors de la première configuration d'un champ).
   function getColumnIdsForTable(tableId) {
     if (!docTablesMeta || !allDocColumns) return [];
     const idx = docTablesMeta.tableId.indexOf(tableId);
@@ -370,23 +381,39 @@
     return ids;
   }
 
-  // Détecte automatiquement les champs Référence "enfants" dont la table cible possède
-  // une colonne de même nom qu'un autre champ visible du formulaire : ce dernier devient
-  // le champ "parent" qui filtre les options de l'enfant (listes déroulantes en cascade).
+  // Retourne {colId, label} de toutes les colonnes d'une table quelconque du document,
+  // utilisé pour peupler le sélecteur "colonne de liaison" dans le panneau de configuration.
+  function getColumnsMetaForTable(tableId) {
+    if (!docTablesMeta || !allDocColumns) return [];
+    const idx = docTablesMeta.tableId.indexOf(tableId);
+    if (idx === -1) return [];
+    const tableRef = docTablesMeta.id[idx];
+    const cols = [];
+    for (let i = 0; i < allDocColumns.id.length; i++) {
+      if (allDocColumns.parentId[i] !== tableRef) continue;
+      const colId = allDocColumns.colId[i];
+      if (colId === 'manualSort' || colId.startsWith('gristHelper_')) continue;
+      cols.push({ colId, label: allDocColumns.label[i] || colId });
+    }
+    return cols;
+  }
+
+  // Construit les dépendances de filtrage en cascade à partir du réglage explicite choisi
+  // par l'utilisateur dans le panneau ⚙️ (filterParentColId / filterLinkColId), et non plus
+  // par une détection automatique silencieuse.
   function computeDependencies(included) {
     dependencyInfo = {};
     fieldDependents = {};
     for (const col of included) {
       if (col.isFormula) continue;
       if (!(col.type.startsWith('Ref:') || col.type.startsWith('RefList:'))) continue;
+      if (!col.filterParentColId || !col.filterLinkColId) continue;
+      const parent = included.find(other => other.colId === col.filterParentColId);
+      if (!parent) continue; // le champ choisi comme filtre n'est plus affiché dans le formulaire
       const targetTable = col.type.split(':')[1];
-      const targetColIds = getColumnIdsForTable(targetTable);
-      const parent = included.find(other => other.colId !== col.colId && targetColIds.includes(other.colId));
-      if (parent) {
-        dependencyInfo[col.colId] = { parentColId: parent.colId, linkColId: parent.colId, targetTable };
-        if (!fieldDependents[parent.colId]) fieldDependents[parent.colId] = [];
-        fieldDependents[parent.colId].push(col.colId);
-      }
+      dependencyInfo[col.colId] = { parentColId: parent.colId, linkColId: col.filterLinkColId, targetTable };
+      if (!fieldDependents[parent.colId]) fieldDependents[parent.colId] = [];
+      fieldDependents[parent.colId].push(col.colId);
     }
   }
 
@@ -423,6 +450,21 @@
     );
     return alphabetical.map((col, idx) => {
       const saved = savedMap[col.colId];
+      const isRef = col.type.startsWith('Ref:') || col.type.startsWith('RefList:');
+      let filterParentColId = saved ? (saved.filterParentColId || null) : null;
+      let filterLinkColId = saved ? (saved.filterLinkColId || null) : null;
+      if (isRef && !saved) {
+        // Suggestion automatique uniquement lors de la toute première configuration :
+        // même colId entre la table cible de la référence et un autre champ du formulaire.
+        // Reste modifiable/annulable ensuite dans le panneau ⚙️.
+        const targetTable = col.type.split(':')[1];
+        const targetColIds = getColumnIdsForTable(targetTable);
+        const guessParent = columns.find(other => other.colId !== col.colId && targetColIds.includes(other.colId));
+        if (guessParent) {
+          filterParentColId = guessParent.colId;
+          filterLinkColId = guessParent.colId;
+        }
+      }
       return {
         colId: col.colId,
         type: col.type,
@@ -435,6 +477,8 @@
         // Une colonne formule ne peut jamais être "obligatoire" (elle n'est pas saisissable)
         required: col.isFormula ? false : (saved ? !!saved.required : false),
         order: (saved && typeof saved.order === 'number') ? saved.order : idx,
+        filterParentColId: isRef ? filterParentColId : null,
+        filterLinkColId: isRef ? filterLinkColId : null,
       };
     });
   }
@@ -461,19 +505,51 @@
   function renderConfigList() {
     const list = document.getElementById('cfgList');
     const sorted = [...mergedConfig].sort((a, b) => a.order - b.order);
-    list.innerHTML = sorted.map(c => `
+    list.innerHTML = sorted.map(c => {
+      const isRef = c.type.startsWith('Ref:') || c.type.startsWith('RefList:');
+      const filterBlock = (isRef && !c.isFormula) ? renderFilterBlock(c) : '';
+      return `
       <div class="cfg-row" data-col="${c.colId}">
         <input type="checkbox" class="cfg-included" ${c.included ? 'checked' : ''} />
         <div>
           <input type="text" class="cfg-label" value="${escapeHtml(c.label)}" />
           <div class="cfg-col-name">${c.colId} · ${c.type}${c.isFormula ? ' · <strong>formule (lecture seule)</strong>' : ''}</div>
+          ${filterBlock}
         </div>
         <label style="display:flex;align-items:center;gap:4px;font-weight:400;font-size:12px;">
           <input type="checkbox" class="cfg-required" ${c.required ? 'checked' : ''} ${c.isFormula ? 'disabled' : ''} /> obligatoire
         </label>
         <input type="number" class="cfg-order order-input" value="${c.order}" />
       </div>
-    `).join('');
+    `;
+    }).join('');
+  }
+
+  // Bloc "filtre en cascade" affiché sous un champ Référence/RéférenceListe dans le panneau ⚙️ :
+  // permet de choisir explicitement quel champ du formulaire filtre les options, et sur quelle
+  // colonne de la table cible la correspondance doit se faire.
+  function renderFilterBlock(c) {
+    const targetTable = c.type.split(':')[1];
+    const parentOptions = mergedConfig
+      .filter(o => o.colId !== c.colId && !o.isFormula)
+      .map(o => `<option value="${o.colId}" ${o.colId === c.filterParentColId ? 'selected' : ''}>${escapeHtml(o.label)} (${o.colId})</option>`)
+      .join('');
+    const targetCols = getColumnsMetaForTable(targetTable);
+    const linkOptions = targetCols
+      .map(tc => `<option value="${tc.colId}" ${tc.colId === c.filterLinkColId ? 'selected' : ''}>${escapeHtml(tc.label)} (${tc.colId})</option>`)
+      .join('');
+    return `
+      <div class="cfg-filter">
+        <div class="cfg-filter-label">🔗 Filtrer les options selon (facultatif) :</div>
+        <select class="cfg-filter-parent">
+          <option value="">— Aucun filtre —</option>
+          ${parentOptions}
+        </select>
+        <select class="cfg-filter-link">
+          <option value="">— Colonne de liaison dans ${escapeHtml(targetTable)} —</option>
+          ${linkOptions}
+        </select>
+      </div>`;
   }
 
   async function saveConfig() {
@@ -490,13 +566,19 @@
       mergedConfig = mergeConfig(tableColumns, null);
     } else {
       const rows = document.querySelectorAll('#cfgList .cfg-row');
-      const newConfig = Array.from(rows).map(row => ({
-        colId: row.dataset.col,
-        included: row.querySelector('.cfg-included').checked,
-        label: row.querySelector('.cfg-label').value.trim(),
-        required: row.querySelector('.cfg-required').checked,
-        order: parseInt(row.querySelector('.cfg-order').value, 10) || 0,
-      }));
+      const newConfig = Array.from(rows).map(row => {
+        const filterParentSel = row.querySelector('.cfg-filter-parent');
+        const filterLinkSel = row.querySelector('.cfg-filter-link');
+        return {
+          colId: row.dataset.col,
+          included: row.querySelector('.cfg-included').checked,
+          label: row.querySelector('.cfg-label').value.trim(),
+          required: row.querySelector('.cfg-required').checked,
+          order: parseInt(row.querySelector('.cfg-order').value, 10) || 0,
+          filterParentColId: filterParentSel ? (filterParentSel.value || null) : null,
+          filterLinkColId: filterLinkSel ? (filterLinkSel.value || null) : null,
+        };
+      });
       await grist.setOption('formConfig', newConfig);
       currentOptions.formConfig = newConfig;
       mergedConfig = mergeConfig(tableColumns, newConfig);
@@ -558,6 +640,18 @@
     excludedNote.textContent = skipped.length
       ? 'Champs masqués (configurables via ⚙️) : ' + skipped.map(c => c.label).join(', ')
       : '';
+
+    // Confirmation visible des filtres en cascade actifs, pour vérifier facilement
+    // qu'un réglage fait dans ⚙️ est bien pris en compte.
+    const cascadeNote = document.getElementById('cascadeNote');
+    if (cascadeNote) {
+      const active = Object.keys(dependencyInfo).map(childColId => {
+        const child = included.find(c => c.colId === childColId);
+        const parent = included.find(c => c.colId === dependencyInfo[childColId].parentColId);
+        return `${child ? child.label : childColId} ← ${parent ? parent.label : dependencyInfo[childColId].parentColId}`;
+      });
+      cascadeNote.textContent = active.length ? '🔗 Filtres en cascade actifs : ' + active.join(' · ') : '';
+    }
   }
 
   async function renderField(col) {
