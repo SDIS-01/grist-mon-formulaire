@@ -7,8 +7,8 @@
 <script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
 <style>
   :root {
-    --accent: #16a34a;
-    --accent-dark: #15803d;
+    --accent: #0066B3;
+    --accent-dark: #004C87;
     --bg: #f8fafc;
     --border: #e2e8f0;
     --text: #1e293b;
@@ -207,7 +207,7 @@
   .cfg-section-row { background: #f0fdf4; border-color: #bbf7d0; }
   .cfg-link-row {
     display: grid;
-    grid-template-columns: 1fr 2fr auto;
+    grid-template-columns: 1fr 2fr auto auto;
     gap: 8px;
     align-items: center;
     padding: 8px;
@@ -217,6 +217,7 @@
     background: white;
   }
   .cfg-link-row input { font-size: 13px; padding: 7px 9px; }
+  .cfg-link-colors { margin-top: 0; }
   .cfg-section-title { font-weight: 600; }
   .cfg-color-picker { display: flex; gap: 6px; margin-top: 8px; }
   .cfg-color-swatch {
@@ -649,7 +650,11 @@
     if (linksEl) {
       linksEl.innerHTML = externalLinksList
         .filter(l => l.url && l.url.trim())
-        .map(l => `<a class="secondary external-link-btn" href="${escapeHtml(l.url)}" target="_blank" rel="noopener">${escapeHtml(l.label || l.url)}</a>`)
+        .map(l => {
+          const c = LINK_COLORS[l.color] || LINK_COLORS.neutral;
+          return `<a class="external-link-btn" href="${escapeHtml(l.url)}" target="_blank" rel="noopener"
+            style="background:${c.bg};color:${c.text};border-color:${c.border};">${escapeHtml(l.label || l.url)}</a>`;
+        })
         .join('');
     }
   }
@@ -812,22 +817,51 @@
 
   // ---------- Liste de liens externes (⚙️) ----------
 
+  // Palette pastel pour les bulles de lien, dérivée des couleurs du logo (versions claires
+  // pour rester lisibles en fond de bouton, avec un texte plus foncé de la même teinte).
+  const LINK_COLORS = {
+    neutral: { label: 'Neutre',  bg: '#ffffff', text: '#1a1a1a', border: '#e2e5ea' },
+    red:     { label: 'Rouge',   bg: '#fde8e8', text: '#b3040f', border: '#f5b8b8' },
+    gold:    { label: 'Or',      bg: '#fff4d6', text: '#92650a', border: '#f2dda3' },
+    blue:    { label: 'Bleu',    bg: '#e3f0fa', text: '#004c87', border: '#a9d0ec' },
+    green:   { label: 'Vert',    bg: '#e6f4ea', text: '#145c2c', border: '#a9dbb8' },
+  };
+
   function renderLinksList() {
     const list = document.getElementById('cfgLinksList');
     if (!list) return;
-    list.innerHTML = externalLinksList.map(l => `
-      <div class="cfg-link-row" data-link="${l.id}">
+    list.innerHTML = externalLinksList.map(l => {
+      const currentColor = l.color && LINK_COLORS[l.color] ? l.color : 'neutral';
+      const swatches = Object.keys(LINK_COLORS).map(key => {
+        const c = LINK_COLORS[key];
+        return `<button type="button" class="cfg-color-swatch${key === currentColor ? ' selected' : ''}"
+          data-color="${key}" title="${c.label}" style="background:${c.bg};border-color:${c.border};"></button>`;
+      }).join('');
+      return `
+      <div class="cfg-link-row" data-link="${l.id}" data-chosen-color="${currentColor}">
         <input type="text" class="cfg-link-label" value="${escapeHtml(l.label)}" placeholder="Libellé (ex. Voir le Kanban)" />
         <input type="text" class="cfg-link-url" value="${escapeHtml(l.url)}" placeholder="https://..." />
+        <div class="cfg-color-picker cfg-link-colors">${swatches}</div>
         <button type="button" class="secondary cfg-link-delete" title="Supprimer ce lien">🗑️</button>
       </div>
-    `).join('') || '<div class="cfg-col-name">Aucun lien pour le moment.</div>';
+    `;
+    }).join('') || '<div class="cfg-col-name">Aucun lien pour le moment.</div>';
 
     list.querySelectorAll('.cfg-link-delete').forEach(btn => {
       btn.addEventListener('click', () => {
         const row = btn.closest('.cfg-link-row');
         externalLinksList = externalLinksList.filter(l => l.id !== row.dataset.link);
         renderLinksList();
+      });
+    });
+
+    list.querySelectorAll('.cfg-link-row').forEach(row => {
+      row.querySelectorAll('.cfg-color-swatch').forEach(btn => {
+        btn.addEventListener('click', () => {
+          row.dataset.chosenColor = btn.dataset.color;
+          row.querySelectorAll('.cfg-color-swatch').forEach(b => b.classList.remove('selected'));
+          btn.classList.add('selected');
+        });
       });
     });
   }
@@ -837,6 +871,7 @@
       id: 'link_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
       label: 'Nouveau lien',
       url: '',
+      color: 'neutral',
     });
     renderLinksList();
   }
@@ -887,6 +922,7 @@
       id: row.dataset.link,
       label: row.querySelector('.cfg-link-label').value.trim() || 'Lien',
       url: row.querySelector('.cfg-link-url').value.trim(),
+      color: row.dataset.chosenColor || 'neutral',
     })).filter(l => l.url); // on ignore les lignes sans URL renseignée
     await grist.setOption('externalLinksList', newLinks);
     await grist.setOption('kanbanUrl', null);
