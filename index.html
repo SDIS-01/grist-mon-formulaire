@@ -166,6 +166,15 @@
   .cfg-comment { margin-top: 6px; font-size: 12px; }
   .cfg-section-row { background: #f0fdf4; border-color: #bbf7d0; }
   .cfg-section-title { font-weight: 600; }
+  .cfg-color-picker { display: flex; gap: 6px; margin-top: 8px; }
+  .cfg-color-swatch {
+    width: 22px; height: 22px;
+    border-radius: 50%;
+    border: 2px solid transparent;
+    cursor: pointer;
+    padding: 0;
+  }
+  .cfg-color-swatch.selected { border-color: #1e293b; box-shadow: 0 0 0 2px white inset; }
   .cfg-filter {
     margin-top: 8px;
     padding-top: 8px;
@@ -622,6 +631,15 @@
     document.getElementById('formView').style.display = 'block';
   }
 
+  // Palette de couleurs disponible pour les chapitres, reprise du logo SDIS.
+  const SECTION_COLORS = [
+    { value: '#E30613', label: 'Rouge' },
+    { value: '#FDB913', label: 'Or' },
+    { value: '#0066B3', label: 'Bleu' },
+    { value: '#1B7A3D', label: 'Vert' },
+    { value: '#1a1a1a', label: 'Noir' },
+  ];
+
   function renderConfigList() {
     const list = document.getElementById('cfgList');
     const fieldItems = mergedConfig.map(c => ({ kind: 'field', order: c.order, data: c }));
@@ -630,12 +648,18 @@
     list.innerHTML = sorted.map(item => {
       if (item.kind === 'section') {
         const s = item.data;
+        const currentColor = s.color || SECTION_COLORS[3].value;
+        const swatches = SECTION_COLORS.map(c => `
+          <button type="button" class="cfg-color-swatch${c.value === currentColor ? ' selected' : ''}"
+            data-color="${c.value}" title="${c.label}" style="background:${c.value};"></button>
+        `).join('');
         return `
-      <div class="cfg-row cfg-section-row" data-section="${s.id}">
+      <div class="cfg-row cfg-section-row" data-section="${s.id}" data-chosen-color="${currentColor}">
         <div style="font-size:18px;">📖</div>
         <div>
           <input type="text" class="cfg-section-title" value="${escapeHtml(s.title)}" placeholder="Titre du chapitre" />
           <div class="cfg-col-name">Chapitre</div>
+          <div class="cfg-color-picker">${swatches}</div>
         </div>
         <button type="button" class="secondary cfg-section-delete" title="Supprimer ce chapitre" style="padding:6px 10px;">🗑️</button>
         <input type="number" class="cfg-order order-input" value="${s.order}" />
@@ -669,12 +693,27 @@
         renderConfigList();
       });
     });
+
+    list.querySelectorAll('.cfg-section-row').forEach(row => {
+      row.querySelectorAll('.cfg-color-swatch').forEach(btn => {
+        btn.addEventListener('click', () => {
+          row.dataset.chosenColor = btn.dataset.color;
+          row.querySelectorAll('.cfg-color-swatch').forEach(b => b.classList.remove('selected'));
+          btn.classList.add('selected');
+        });
+      });
+    });
   }
 
   function addSection() {
     const allOrders = [...mergedConfig.map(c => c.order), ...formSections.map(s => s.order)];
     const maxOrder = allOrders.length ? Math.max(...allOrders) : 0;
-    formSections.push({ id: 'sec_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6), title: 'Nouveau chapitre', order: maxOrder + 1 });
+    formSections.push({
+      id: 'sec_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+      title: 'Nouveau chapitre',
+      order: maxOrder + 1,
+      color: SECTION_COLORS[3].value,
+    });
     renderConfigList();
   }
 
@@ -749,6 +788,7 @@
         id: row.dataset.section,
         title: row.querySelector('.cfg-section-title').value.trim() || 'Chapitre',
         order: parseInt(row.querySelector('.cfg-order').value, 10) || 0,
+        color: row.dataset.chosenColor || SECTION_COLORS[3].value,
       }));
       await grist.setOption('formConfig', newConfig);
       await grist.setOption('formSections', newSections);
@@ -794,7 +834,8 @@
     const fieldsHtml = [];
     for (const item of stream) {
       if (item.kind === 'section') {
-        fieldsHtml.push(`<div class="form-section"><h2>${escapeHtml(item.section.title)}</h2></div>`);
+        const secColor = item.section.color || '#1B7A3D';
+        fieldsHtml.push(`<div class="form-section" style="border-bottom-color:${secColor};"><h2 style="color:${secColor};">${escapeHtml(item.section.title)}</h2></div>`);
       } else {
         fieldsHtml.push(await renderField(item.col));
       }
