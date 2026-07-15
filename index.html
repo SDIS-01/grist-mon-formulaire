@@ -28,6 +28,9 @@
   .header-logo { height: 38px; width: auto; flex-shrink: 0; }
   .header-actions { display: flex; gap: 8px; flex-shrink: 0; }
   .header-brand h1 { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #gearBtn { display: none; }
+  #gearBtn.revealed { display: flex; }
+  .header-logo { cursor: pointer; }
   h1 { font-size: 18px; margin: 0; }
   .gear {
     border: 1px solid var(--border);
@@ -429,6 +432,28 @@
 
   document.getElementById('gearBtn').addEventListener('click', showConfig);
   document.getElementById('printBtn').addEventListener('click', () => window.print());
+
+  // Déclencheur discret : 5 clics rapides sur le logo révèlent la roue crantée
+  // de configuration (masquée par défaut pour les utilisateurs publics).
+  // Rappel : la vraie protection contre la modification des données reste les
+  // Access Rules Grist (Create seule sur la table, structure verrouillée) —
+  // ceci n'est qu'une question d'ergonomie, pas de sécurité.
+  (function setupGearReveal() {
+    const logo = document.querySelector('.header-logo');
+    const gear = document.getElementById('gearBtn');
+    if (!logo || !gear) return;
+    let clicks = 0;
+    let resetTimer = null;
+    logo.addEventListener('click', () => {
+      clicks++;
+      clearTimeout(resetTimer);
+      resetTimer = setTimeout(() => { clicks = 0; }, 2000);
+      if (clicks >= 5) {
+        gear.classList.add('revealed');
+        clicks = 0;
+      }
+    });
+  })();
   document.getElementById('cfgCancel').addEventListener('click', hideConfig);
   document.getElementById('cfgSave').addEventListener('click', saveConfig);
   document.getElementById('cfgRefresh').addEventListener('click', async () => {
