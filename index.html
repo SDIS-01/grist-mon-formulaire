@@ -86,6 +86,26 @@
     gap: 4px;
   }
   .formula-preview-list li { line-height: 1.4; }
+  .attachment-list { display: flex; flex-direction: column; gap: 8px; }
+  .attachment-item {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 13px; color: var(--text);
+    text-decoration: none;
+    padding: 6px 8px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: white;
+    width: fit-content;
+    max-width: 100%;
+  }
+  .attachment-item:hover { background: #f1f5f9; }
+  .attachment-item.attachment-image { flex-direction: column; align-items: flex-start; }
+  .attachment-item.attachment-image img {
+    max-width: 220px; max-height: 160px;
+    border-radius: 6px;
+    object-fit: cover;
+  }
+  .attachment-item span { overflow-wrap: anywhere; }
   .field-comment { font-size: 12px; color: var(--muted); margin: -8px 0 6px; line-height: 1.4; }
   .form-section {
     margin: 10px 0 -4px;
@@ -1076,6 +1096,50 @@
   // champ Référence dont il dépend change, on va chercher la valeur du sous-champ
   // directement dans les données déjà chargées de la table référencée (refOptionsCache),
   // sans réinterpréter la formule elle-même.
+  // ---------- Pièces jointes en lecture seule (champs formule de type Attachments) ----------
+
+  let attachmentsMetaCache = null; // métadonnées (_grist_Attachments) : nom de fichier, type MIME
+  let downloadTokenInfo = null;    // token d'accès réutilisé pour construire les liens de téléchargement
+
+  async function getAttachmentsMeta() {
+    if (!attachmentsMetaCache) {
+      attachmentsMetaCache = await grist.docApi.fetchTable('_grist_Attachments');
+    }
+    return attachmentsMetaCache;
+  }
+
+  async function getDownloadTokenInfo() {
+    if (!downloadTokenInfo) {
+      downloadTokenInfo = await grist.docApi.getAccessToken({ readOnly: true });
+    }
+    return downloadTokenInfo;
+  }
+
+  // Construit l'affichage (vignette pour les images, sinon lien) pour une valeur brute
+  // de colonne Pièce(s) jointe(s) — gère le marqueur de liste Grist ["L", id1, id2, ...].
+  async function renderAttachmentLinks(raw) {
+    const ids = Array.isArray(raw) ? (raw[0] === 'L' ? raw.slice(1) : raw) : (raw ? [raw] : []);
+    const validIds = ids.filter(id => typeof id === 'number' && id > 0);
+    if (!validIds.length) return '';
+
+    const meta = await getAttachmentsMeta();
+    const tok = await getDownloadTokenInfo();
+
+    return '<div class="attachment-list">' + validIds.map(id => {
+      const idx = meta.id.indexOf(id);
+      const fileName = idx !== -1 ? String(meta.fileName[idx]) : ('Fichier #' + id);
+      const fileType = idx !== -1 ? String(meta.fileType[idx] || '') : '';
+      const url = `${tok.baseUrl}/attachments/${id}/download?auth=${encodeURIComponent(tok.token)}`;
+      const isImage = fileType.startsWith('image/');
+      return isImage
+        ? `<a class="attachment-item attachment-image" href="${url}" target="_blank" rel="noopener">
+             <img src="${url}" alt="${escapeHtml(fileName)}" />
+             <span>${escapeHtml(fileName)}</span>
+           </a>`
+        : `<a class="attachment-item" href="${url}" target="_blank" rel="noopener">📎 ${escapeHtml(fileName)}</a>`;
+    }).join('') + '</div>';
+  }
+
   function setupFormulaPreview(col) {
     const info = formulaPreviewInfo[col.colId];
     if (!info) return;
@@ -1083,7 +1147,7 @@
     if (!el) return;
     const placeholder = el.getAttribute('data-placeholder') || '';
 
-    formulaCallbacks[col.colId] = () => {
+    formulaCallbacks[col.colId] = async () => {
       const refValue = getFieldRawValue(info.refColId);
       const data = refOptionsCache[info.targetTable];
       if (refValue === null || refValue === undefined || refValue === '' || !data || !data[info.subColId]) {
@@ -1093,6 +1157,18 @@
       const targetId = typeof refValue === 'string' ? parseInt(refValue, 10) : refValue;
       const idx = data.id.indexOf(targetId);
       const raw = idx !== -1 ? data[info.subColId][idx] : null;
+
+      if (col.type === 'Attachments') {
+        try {
+          const html = await renderAttachmentLinks(raw);
+          el.innerHTML = html || `<span class="formula-preview-placeholder">${escapeHtml(placeholder)}</span>`;
+        } catch (err) {
+          console.error(err);
+          el.innerHTML = '<span class="formula-preview-placeholder">Erreur de chargement de la pièce jointe</span>';
+        }
+        return;
+      }
+
       el.innerHTML = renderFormulaPreviewHtml(raw, col.type, col.widgetOptions, placeholder);
     };
 
