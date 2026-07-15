@@ -824,22 +824,11 @@
       }
     });
 
-    const skipped = config.filter(c => !c.included);
-    excludedNote.textContent = skipped.length
-      ? 'Champs masqués (configurables via ⚙️) : ' + skipped.map(c => c.label).join(', ')
-      : '';
-
-    // Confirmation visible des filtres en cascade actifs, pour vérifier facilement
-    // qu'un réglage fait dans ⚙️ est bien pris en compte.
+    // Notes de diagnostic (champs masqués / filtres en cascade actifs) retirées de
+    // l'affichage du formulaire — utiles uniquement pendant la configuration.
+    excludedNote.textContent = '';
     const cascadeNote = document.getElementById('cascadeNote');
-    if (cascadeNote) {
-      const active = Object.keys(dependencyInfo).map(childColId => {
-        const child = included.find(c => c.colId === childColId);
-        const parent = included.find(c => c.colId === dependencyInfo[childColId].parentColId);
-        return `${child ? child.label : childColId} ← ${parent ? parent.label : dependencyInfo[childColId].parentColId}`;
-      });
-      cascadeNote.textContent = active.length ? '🔗 Filtres en cascade actifs : ' + active.join(' · ') : '';
-    }
+    if (cascadeNote) cascadeNote.textContent = '';
   }
 
   // Affiche le commentaire/aide facultatif configuré pour un champ, sous son libellé.
