@@ -40,6 +40,18 @@
   }
   .gear:hover { background: #f1f5f9; }
   .subtitle { color: var(--muted); font-size: 13px; margin-bottom: 20px; }
+  .external-links-row { display: flex; gap: 8px; flex-wrap: wrap; margin: -8px 0 16px; }
+  .external-link-btn {
+    padding: 8px 14px;
+    border: 1px solid var(--border);
+    background: white;
+    border-radius: 999px;
+    font-size: 13px;
+    font-weight: 600;
+    text-decoration: none;
+    color: var(--text);
+  }
+  .external-link-btn:hover { background: #f1f5f9; }
   form { display: flex; flex-direction: column; gap: 14px; }
   label { font-size: 13px; font-weight: 600; margin-bottom: 4px; display: block; }
   .req { color: #dc2626; }
@@ -193,6 +205,18 @@
   .cfg-col-name { font-size: 12px; color: var(--muted); }
   .cfg-comment { margin-top: 6px; font-size: 12px; }
   .cfg-section-row { background: #f0fdf4; border-color: #bbf7d0; }
+  .cfg-link-row {
+    display: grid;
+    grid-template-columns: 1fr 2fr auto;
+    gap: 8px;
+    align-items: center;
+    padding: 8px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    margin-bottom: 6px;
+    background: white;
+  }
+  .cfg-link-row input { font-size: 13px; padding: 7px 9px; }
   .cfg-section-title { font-weight: 600; }
   .cfg-color-picker { display: flex; gap: 6px; margin-top: 8px; }
   .cfg-color-swatch {
@@ -266,7 +290,7 @@
 
   /* ---------- Impression / PDF ---------- */
   @media print {
-    .header-actions, #excludedNote, #cascadeNote, button.primary, button.secondary,
+    .header-actions, #excludedNote, #cascadeNote, #externalLinks, button.primary, button.secondary,
     #setupPanel, #configPanel { display: none !important; }
     body { padding: 0; background: white; }
     .wrap { max-width: 100%; }
@@ -291,6 +315,7 @@
     </div>
   </div>
   <div class="subtitle" id="pageSubtitle">Chargement…</div>
+  <div id="externalLinks" class="external-links-row"></div>
 
   <div id="setupPanel">
     <div class="cfg-block">
@@ -323,6 +348,11 @@
       <label for="cfgFormSubtitle" style="margin-top:10px;">Sous-titre / description</label>
       <input type="text" id="cfgFormSubtitle" placeholder="Par défaut : phrase générique avec le nom de la table" />
     </div>
+    <div class="cfg-block">
+      <label>🔗 Liens externes (facultatif — ex. Kanban, Gantt, autre page)</label>
+      <div id="cfgLinksList" style="margin-top:8px;"></div>
+      <button type="button" class="secondary" id="cfgAddLink" style="margin-top:8px;">+ Ajouter un lien</button>
+    </div>
     <div class="subtitle">Cochez les champs à afficher, renommez-les si besoin, marquez-les obligatoires et fixez leur ordre. Les colonnes formule sont affichées en lecture seule (grisées) dans le formulaire.</div>
     <div style="margin-bottom:10px;">
       <button type="button" class="secondary" id="cfgAddSection">📖 Ajouter un chapitre</button>
@@ -345,6 +375,23 @@
   let tableColumns = [];      // column meta for targetTableId
   let mergedConfig = [];
   let formSections = []; // chapitres : [{ id, title, order }]
+  let externalLinksList = []; // liens externes personnalisés : [{ id, label, url }]
+
+  // Charge la liste de liens externes, avec migration automatique depuis les deux
+  // anciens champs fixes (kanbanUrl / ganttUrl) si la liste n'existe pas encore.
+  function loadExternalLinks() {
+    if (Array.isArray(currentOptions.externalLinksList)) {
+      return currentOptions.externalLinksList;
+    }
+    const migrated = [];
+    if (currentOptions.kanbanUrl) {
+      migrated.push({ id: 'link_kanban_legacy', label: '📊 Voir le Kanban', url: currentOptions.kanbanUrl });
+    }
+    if (currentOptions.ganttUrl) {
+      migrated.push({ id: 'link_gantt_legacy', label: '📅 Voir le Gantt', url: currentOptions.ganttUrl });
+    }
+    return migrated;
+  }
   let refOptionsCache = {};
   let currentOptions = null;
   let comboState = {};        // colId -> option sélectionnée (Ref) ou tableau (RefList)
@@ -401,6 +448,7 @@
   });
   document.getElementById('setupSave').addEventListener('click', saveSetup);
   document.getElementById('cfgAddSection').addEventListener('click', addSection);
+  document.getElementById('cfgAddLink').addEventListener('click', addExternalLink);
 
   async function bootstrap() {
     allTableIds = await grist.docApi.listTables();
@@ -424,6 +472,7 @@
     await loadColumnsFor(targetTableId);
     mergedConfig = mergeConfig(tableColumns, currentOptions.formConfig);
     formSections = currentOptions.formSections || [];
+    externalLinksList = loadExternalLinks();
     updateHeaderText();
 
     if (document.getElementById('configPanel').style.display !== 'block') {
@@ -455,6 +504,7 @@
     await loadColumnsFor(targetTableId);
     mergedConfig = mergeConfig(tableColumns, currentOptions.formConfig);
     formSections = currentOptions.formSections || [];
+    externalLinksList = loadExternalLinks();
     updateHeaderText();
     await renderForm(mergedConfig);
   }
@@ -593,6 +643,15 @@
       ('Formulaire de saisie pour la table ' + targetTableId + '.');
     document.getElementById('pageTitle').textContent = '📋 ' + title;
     document.getElementById('pageSubtitle').textContent = subtitle;
+
+    // Boutons de lien externes : un par entrée de la liste, uniquement si une URL est renseignée.
+    const linksEl = document.getElementById('externalLinks');
+    if (linksEl) {
+      linksEl.innerHTML = externalLinksList
+        .filter(l => l.url && l.url.trim())
+        .map(l => `<a class="secondary external-link-btn" href="${escapeHtml(l.url)}" target="_blank" rel="noopener">${escapeHtml(l.label || l.url)}</a>`)
+        .join('');
+    }
   }
 
   function mergeConfig(columns, savedConfig) {
@@ -652,6 +711,7 @@
 
     document.getElementById('cfgFormTitle').value = currentOptions.formTitle || '';
     document.getElementById('cfgFormSubtitle').value = currentOptions.formSubtitle || '';
+    renderLinksList();
 
     renderConfigList();
   }
@@ -750,6 +810,37 @@
     renderConfigList();
   }
 
+  // ---------- Liste de liens externes (⚙️) ----------
+
+  function renderLinksList() {
+    const list = document.getElementById('cfgLinksList');
+    if (!list) return;
+    list.innerHTML = externalLinksList.map(l => `
+      <div class="cfg-link-row" data-link="${l.id}">
+        <input type="text" class="cfg-link-label" value="${escapeHtml(l.label)}" placeholder="Libellé (ex. Voir le Kanban)" />
+        <input type="text" class="cfg-link-url" value="${escapeHtml(l.url)}" placeholder="https://..." />
+        <button type="button" class="secondary cfg-link-delete" title="Supprimer ce lien">🗑️</button>
+      </div>
+    `).join('') || '<div class="cfg-col-name">Aucun lien pour le moment.</div>';
+
+    list.querySelectorAll('.cfg-link-delete').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const row = btn.closest('.cfg-link-row');
+        externalLinksList = externalLinksList.filter(l => l.id !== row.dataset.link);
+        renderLinksList();
+      });
+    });
+  }
+
+  function addExternalLink() {
+    externalLinksList.push({
+      id: 'link_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+      label: 'Nouveau lien',
+      url: '',
+    });
+    renderLinksList();
+  }
+
   // Bloc "filtre en cascade" affiché sous un champ Référence/RéférenceListe dans le panneau ⚙️ :
   // permet de choisir explicitement quel champ du formulaire filtre les options, et sur quelle
   // colonne de la table cible la correspondance doit se faire.
@@ -788,6 +879,22 @@
     await grist.setOption('formSubtitle', formSubtitle || null);
     currentOptions.formTitle = formTitle || null;
     currentOptions.formSubtitle = formSubtitle || null;
+
+    // Liste de liens externes : lue depuis les lignes du panneau, puis sauvegardée.
+    // On efface aussi les anciens champs fixes (kanbanUrl/ganttUrl) une fois migrés.
+    const linkRows = document.querySelectorAll('#cfgLinksList .cfg-link-row');
+    const newLinks = Array.from(linkRows).map(row => ({
+      id: row.dataset.link,
+      label: row.querySelector('.cfg-link-label').value.trim() || 'Lien',
+      url: row.querySelector('.cfg-link-url').value.trim(),
+    })).filter(l => l.url); // on ignore les lignes sans URL renseignée
+    await grist.setOption('externalLinksList', newLinks);
+    await grist.setOption('kanbanUrl', null);
+    await grist.setOption('ganttUrl', null);
+    currentOptions.externalLinksList = newLinks;
+    currentOptions.kanbanUrl = null;
+    currentOptions.ganttUrl = null;
+    externalLinksList = newLinks;
 
     if (tableChanged) {
       await grist.setOption('tableId', chosenTable);
