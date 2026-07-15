@@ -126,6 +126,7 @@
     align-items: start;
   }
   .field-row-2col > div { min-width: 0; }
+  .form-actions-row { display: flex; justify-content: flex-end; gap: 10px; margin-top: 8px; }
   button.primary {
     margin-top: 8px;
     padding: 11px;
@@ -884,8 +885,13 @@
       fieldsHtml.push(await renderField(item.col));
     }
 
-    formEl.innerHTML = fieldsHtml.join('') + '<button type="submit" class="primary">Envoyer</button>';
+    formEl.innerHTML = fieldsHtml.join('') +
+      '<div class="form-actions-row">' +
+      '<button type="button" class="secondary" id="resetFormBtn">↺ Réinitialiser</button>' +
+      '<button type="submit" class="primary">Envoyer</button>' +
+      '</div>';
     formEl.onsubmit = handleSubmit;
+    document.getElementById('resetFormBtn').addEventListener('click', () => { fullFormReset(formEl); hideMsg(); });
 
     included
       .filter(col => !col.isFormula && (col.type.startsWith('Ref:') || col.type.startsWith('RefList:') || col.type === 'Choice' || col.type === 'ChoiceList'))
@@ -1367,6 +1373,18 @@
       });
   }
 
+  // Réinitialisation complète du formulaire : champs natifs, combobox (Ref/Choice),
+  // et rafraîchissement des champs en cascade / aperçus de formule qui en dépendaient.
+  function fullFormReset(formEl) {
+    if (formEl) formEl.reset();
+    resetAllCombos();
+    // Propage la remise à zéro aux champs dépendants (cascade + aperçus de formule),
+    // pour qu'ils redeviennent vides plutôt que de garder une ancienne valeur affichée.
+    mergedConfig
+      .filter(c => c.included && !c.isFormula && (c.type.startsWith('Ref:') || c.type.startsWith('RefList:') || c.type === 'Choice' || c.type === 'ChoiceList'))
+      .forEach(col => notifyDependents(col.colId));
+  }
+
   function escapeHtml(str) {
     return String(str).replace(/[&<>"']/g, c => ({
       '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
@@ -1465,8 +1483,7 @@
       await table.create({ fields });
 
       showMsg('success', '✓ Enregistrement ajouté avec succès.');
-      e.target.reset();
-      resetAllCombos();
+      fullFormReset(e.target);
     } catch (err) {
       console.error(err);
       showMsg('error', 'Erreur lors de l’envoi : ' + (err.message || err));
