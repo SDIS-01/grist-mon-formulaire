@@ -120,38 +120,6 @@
     object-fit: cover;
   }
   .attachment-item span { overflow-wrap: anywhere; }
-  .attachment-view-btn {
-    border: 1px solid var(--border);
-    background: #f8fafc;
-    border-radius: 6px;
-    font-size: 12px;
-    padding: 4px 9px;
-    cursor: pointer;
-    white-space: nowrap;
-  }
-  .attachment-view-btn:hover { background: #e2e8f0; }
-
-  /* ---------- Modale d'aperçu de pièce jointe ---------- */
-  .modal-overlay {
-    display: none;
-    position: fixed; inset: 0;
-    background: rgba(0,0,0,0.5);
-    z-index: 200;
-    align-items: center;
-    justify-content: center;
-    padding: 20px;
-  }
-  .modal-overlay.open { display: flex; }
-  .modal-box {
-    background: white;
-    border-radius: var(--radius, 12px);
-    max-width: 700px;
-    width: 100%;
-    max-height: 85vh;
-    overflow-y: auto;
-    padding: 18px;
-  }
-  .modal-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 14px; }
   .btn-download {
     padding: 9px 14px;
     border-radius: 8px;
@@ -374,6 +342,7 @@
   <div id="formView">
     <form id="form"></form>
     <div id="msg" class="msg"></div>
+    <div id="attachActionArea"></div>
     <div id="cascadeNote" class="note"></div>
     <div id="excludedNote" class="note"></div>
   </div>
@@ -397,6 +366,14 @@
       <div id="cfgLinksList" style="margin-top:8px;"></div>
       <button type="button" class="secondary" id="cfgAddLink" style="margin-top:8px;">+ Ajouter un lien</button>
     </div>
+    <div class="cfg-block">
+      <label for="cfgAttachFormUrl">📎 Formulaire natif Grist pour les pièces jointes (facultatif)</label>
+      <input type="text" id="cfgAttachFormUrl" placeholder="https://.../forms/XXXXXXX/N (laisser vide pour ne pas proposer cette option)" />
+      <div class="cfg-col-name" style="margin-top:4px;">
+        Nécessite une colonne <strong>CleLien</strong> (texte simple) sur la table de ce formulaire.
+        La clé est générée par le widget à l'envoi et transmise dans l'URL.
+      </div>
+    </div>
     <div class="subtitle">Cochez les champs à afficher, renommez-les si besoin, marquez-les obligatoires et fixez leur ordre. Les colonnes formule sont affichées en lecture seule (grisées) dans le formulaire.</div>
     <div style="margin-bottom:10px;">
       <button type="button" class="secondary" id="cfgAddSection">📖 Ajouter un chapitre</button>
@@ -408,16 +385,6 @@
     </div>
   </div>
 
-</div>
-
-<div class="modal-overlay" id="attachPreviewModal">
-  <div class="modal-box">
-    <div id="attachPreviewContent"></div>
-    <div class="modal-actions">
-      <a id="attachPreviewDownload" class="btn-download" target="_blank" rel="noopener" download>⬇️ Télécharger</a>
-      <button type="button" class="secondary" id="attachPreviewClose">Fermer</button>
-    </div>
-  </div>
 </div>
 
 <script>
@@ -791,6 +758,7 @@
 
     document.getElementById('cfgFormTitle').value = currentOptions.formTitle || '';
     document.getElementById('cfgFormSubtitle').value = currentOptions.formSubtitle || '';
+    document.getElementById('cfgAttachFormUrl').value = currentOptions.attachFormUrl || '';
     renderLinksList();
 
     renderConfigList();
@@ -990,6 +958,10 @@
     currentOptions.formTitle = formTitle || null;
     currentOptions.formSubtitle = formSubtitle || null;
 
+    const attachFormUrl = document.getElementById('cfgAttachFormUrl').value.trim();
+    await grist.setOption('attachFormUrl', attachFormUrl || null);
+    currentOptions.attachFormUrl = attachFormUrl || null;
+
     // Liste de liens externes : lue depuis les lignes du panneau, puis sauvegardée.
     // On efface aussi les anciens champs fixes (kanbanUrl/ganttUrl) une fois migrés.
     const linkRows = document.querySelectorAll('#cfgLinksList .cfg-link-row');
@@ -1103,13 +1075,23 @@
       fieldsHtml.push(await renderField(item.col));
     }
 
+    const attachHint = currentOptions.attachFormUrl
+      ? '<div class="field-comment" style="margin:4px 0 0;">📎 Après validation, vous pourrez associer une ou plusieurs pièces jointes à cet enregistrement.</div>'
+      : '';
+
     formEl.innerHTML = fieldsHtml.join('') +
+      attachHint +
       '<div class="form-actions-row">' +
       '<button type="button" class="secondary" id="resetFormBtn">↺ Réinitialiser</button>' +
       '<button type="submit" class="primary">Envoyer</button>' +
       '</div>';
     formEl.onsubmit = handleSubmit;
-    document.getElementById('resetFormBtn').addEventListener('click', () => { fullFormReset(formEl); hideMsg(); });
+    document.getElementById('resetFormBtn').addEventListener('click', () => {
+      fullFormReset(formEl);
+      hideMsg();
+      const attachArea = document.getElementById('attachActionArea');
+      if (attachArea) attachArea.innerHTML = '';
+    });
 
     included
       .filter(col => !col.isFormula && (col.type.startsWith('Ref:') || col.type.startsWith('RefList:') || col.type === 'Choice' || col.type === 'ChoiceList'))
@@ -1389,8 +1371,7 @@
 
   // Construit l'affichage (vignette pour les images, sinon lien) pour une valeur brute
   // de colonne Pièce(s) jointe(s) — gère le marqueur de liste Grist ["L", id1, id2, ...].
-  // Chaque pièce jointe propose un bouton "Visualiser" (aperçu dans une fenêtre, sans
-  // télécharger de fichier) en plus du téléchargement classique.
+  // Chaque pièce jointe reste téléchargeable en cliquant dessus.
   async function renderAttachmentLinks(raw) {
     const ids = Array.isArray(raw) ? (raw[0] === 'L' ? raw.slice(1) : raw) : (raw ? [raw] : []);
     const validIds = ids.filter(id => typeof id === 'number' && id > 0);
@@ -1405,53 +1386,14 @@
       const fileType = idx !== -1 ? String(meta.fileType[idx] || '') : '';
       const url = `${tok.baseUrl}/attachments/${id}/download?auth=${encodeURIComponent(tok.token)}`;
       const isImage = fileType.startsWith('image/');
-      const viewBtn = `<button type="button" class="attachment-view-btn"
-        data-url="${escapeHtml(url)}" data-name="${escapeHtml(fileName)}" data-type="${escapeHtml(fileType)}">👁️ Visualiser</button>`;
       return isImage
-        ? `<div class="attachment-item attachment-image">
+        ? `<a class="attachment-item attachment-image" href="${url}" target="_blank" rel="noopener">
              <img src="${url}" alt="${escapeHtml(fileName)}" />
              <span>${escapeHtml(fileName)}</span>
-             ${viewBtn}
-           </div>`
-        : `<div class="attachment-item">📎 <span>${escapeHtml(fileName)}</span> ${viewBtn}</div>`;
+           </a>`
+        : `<a class="attachment-item" href="${url}" target="_blank" rel="noopener">📎 ${escapeHtml(fileName)}</a>`;
     }).join('') + '</div>';
   }
-
-  // Ouvre la fenêtre d'aperçu pour une pièce jointe : image ou PDF affichés directement,
-  // autres types renvoyés vers le téléchargement (pas d'aperçu natif possible au navigateur).
-  function openAttachmentPreview(url, fileName, fileType) {
-    const content = document.getElementById('attachPreviewContent');
-    if (fileType.startsWith('image/')) {
-      content.innerHTML = `<img src="${url}" alt="${escapeHtml(fileName)}" style="max-width:100%;max-height:70vh;display:block;margin:0 auto;border-radius:8px;" />`;
-    } else if (fileType === 'application/pdf') {
-      content.innerHTML = `<iframe src="${url}" style="width:100%;height:70vh;border:none;" title="${escapeHtml(fileName)}"></iframe>`;
-    } else {
-      content.innerHTML = `<p style="font-size:14px;color:var(--muted);">Aperçu non disponible pour ce type de fichier` +
-        (fileType ? ` (${escapeHtml(fileType)})` : '') +
-        `. Utilisez le téléchargement ci-dessous pour l'ouvrir.</p>`;
-    }
-    const dl = document.getElementById('attachPreviewDownload');
-    dl.href = url;
-    dl.setAttribute('download', fileName);
-    document.getElementById('attachPreviewModal').classList.add('open');
-  }
-
-  // Branche les boutons "Visualiser" présents dans un conteneur donné (à appeler après
-  // toute insertion de renderAttachmentLinks() dans le DOM via innerHTML).
-  function wireAttachmentPreviewButtons(container) {
-    container.querySelectorAll('.attachment-view-btn').forEach(btn => {
-      btn.addEventListener('click', () => {
-        openAttachmentPreview(btn.dataset.url, btn.dataset.name, btn.dataset.type);
-      });
-    });
-  }
-
-  document.getElementById('attachPreviewClose').addEventListener('click', () => {
-    document.getElementById('attachPreviewModal').classList.remove('open');
-  });
-  document.getElementById('attachPreviewModal').addEventListener('click', (e) => {
-    if (e.target.id === 'attachPreviewModal') document.getElementById('attachPreviewModal').classList.remove('open');
-  });
 
   function setupFormulaPreview(col) {
     const info = formulaPreviewInfo[col.colId];
@@ -1475,7 +1417,6 @@
         try {
           const html = await renderAttachmentLinks(raw);
           el.innerHTML = html || `<span class="formula-preview-placeholder">${escapeHtml(placeholder)}</span>`;
-          wireAttachmentPreviewButtons(el);
         } catch (err) {
           console.error(err);
           el.innerHTML = '<span class="formula-preview-placeholder">Erreur de chargement de la pièce jointe</span>';
@@ -1674,6 +1615,8 @@
     const btn = e.target.querySelector('button[type="submit"]');
     btn.disabled = true;
     hideMsg();
+    const attachAreaReset = document.getElementById('attachActionArea');
+    if (attachAreaReset) attachAreaReset.innerHTML = '';
 
     try {
       // Les colonnes formule sont exclues de l'envoi : Grist les calcule seul.
@@ -1740,9 +1683,34 @@
       }
 
       const table = grist.getTable(targetTableId);
-      await table.create({ fields });
+      const created = await table.create({ fields });
+      const newRowId = created && typeof created === 'object'
+        ? (Array.isArray(created) ? created[0].id : created.id)
+        : null;
 
       showMsg('success', '✓ Enregistrement ajouté avec succès.');
+
+      // Si un formulaire natif de pièce jointe est configuré, on récupère la clé de
+      // liaison générée par Grist sur la ligne qu'on vient de créer (formule déclenchée
+      // côté document), puis on propose un bouton avec le lien pré-rempli.
+      const attachArea = document.getElementById('attachActionArea');
+      attachArea.innerHTML = '';
+      if (currentOptions.attachFormUrl && newRowId) {
+        try {
+          const keyCol = currentOptions.attachKeyCol || 'CleLien';
+          const fresh = await grist.docApi.fetchTable(targetTableId);
+          const idx = fresh.id.indexOf(newRowId);
+          const keyValue = idx !== -1 && fresh[keyCol] ? fresh[keyCol][idx] : null;
+          if (keyValue) {
+            const sep = currentOptions.attachFormUrl.includes('?') ? '&' : '?';
+            const url = currentOptions.attachFormUrl + sep + encodeURIComponent(keyCol) + '=' + encodeURIComponent(keyValue);
+            attachArea.innerHTML = `<a class="btn-download" style="display:inline-block;margin-top:10px;" href="${escapeHtml(url)}" target="_blank" rel="noopener">📎 Ajouter une pièce jointe à cet enregistrement</a>`;
+          }
+        } catch (err) {
+          console.error('Impossible de préparer le lien pièce jointe :', err);
+        }
+      }
+
       fullFormReset(e.target);
     } catch (err) {
       console.error(err);
