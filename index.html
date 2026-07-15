@@ -279,6 +279,12 @@
         <button type="button" class="secondary" id="cfgRefresh">🔄 Actualiser les colonnes</button>
       </div>
     </div>
+    <div class="cfg-block">
+      <label for="cfgFormTitle">Titre du formulaire</label>
+      <input type="text" id="cfgFormTitle" placeholder="Par défaut : nom de la table" />
+      <label for="cfgFormSubtitle" style="margin-top:10px;">Sous-titre / description</label>
+      <input type="text" id="cfgFormSubtitle" placeholder="Par défaut : phrase générique avec le nom de la table" />
+    </div>
     <div class="subtitle">Cochez les champs à afficher, renommez-les si besoin, marquez-les obligatoires et fixez leur ordre. Les colonnes formule sont affichées en lecture seule (grisées) dans le formulaire.</div>
     <div style="margin-bottom:10px;">
       <button type="button" class="secondary" id="cfgAddSection">📖 Ajouter un chapitre</button>
@@ -380,8 +386,7 @@
     await loadColumnsFor(targetTableId);
     mergedConfig = mergeConfig(tableColumns, currentOptions.formConfig);
     formSections = currentOptions.formSections || [];
-    document.getElementById('pageTitle').textContent = '📋 ' + targetTableId;
-    document.getElementById('pageSubtitle').textContent = 'Formulaire de saisie pour la table ' + targetTableId + '.';
+    updateHeaderText();
 
     if (document.getElementById('configPanel').style.display !== 'block') {
       await renderForm(mergedConfig);
@@ -412,8 +417,7 @@
     await loadColumnsFor(targetTableId);
     mergedConfig = mergeConfig(tableColumns, currentOptions.formConfig);
     formSections = currentOptions.formSections || [];
-    document.getElementById('pageTitle').textContent = '📋 ' + targetTableId;
-    document.getElementById('pageSubtitle').textContent = 'Formulaire de saisie pour la table ' + targetTableId + '.';
+    updateHeaderText();
     await renderForm(mergedConfig);
   }
 
@@ -543,6 +547,16 @@
     });
   }
 
+  // Met à jour le titre/sous-titre affichés : utilise le titre personnalisé s'il est
+  // défini (currentOptions.formTitle / formSubtitle), sinon retombe sur le nom de la table.
+  function updateHeaderText() {
+    const title = (currentOptions.formTitle && currentOptions.formTitle.trim()) || targetTableId;
+    const subtitle = (currentOptions.formSubtitle && currentOptions.formSubtitle.trim()) ||
+      ('Formulaire de saisie pour la table ' + targetTableId + '.');
+    document.getElementById('pageTitle').textContent = '📋 ' + title;
+    document.getElementById('pageSubtitle').textContent = subtitle;
+  }
+
   function mergeConfig(columns, savedConfig) {
     const savedMap = {};
     (savedConfig || []).forEach(c => { savedMap[c.colId] = c; });
@@ -596,6 +610,9 @@
 
     const sel = document.getElementById('cfgTableSelect');
     sel.innerHTML = allTableIds.map(t => `<option value="${t}" ${t === targetTableId ? 'selected' : ''}>${t}</option>`).join('');
+
+    document.getElementById('cfgFormTitle').value = currentOptions.formTitle || '';
+    document.getElementById('cfgFormSubtitle').value = currentOptions.formSubtitle || '';
 
     renderConfigList();
   }
@@ -692,6 +709,14 @@
     const chosenTable = document.getElementById('cfgTableSelect').value;
     const tableChanged = chosenTable !== targetTableId;
 
+    // Titre/sous-titre personnalisés : indépendants de la table, sauvegardés dans tous les cas.
+    const formTitle = document.getElementById('cfgFormTitle').value.trim();
+    const formSubtitle = document.getElementById('cfgFormSubtitle').value.trim();
+    await grist.setOption('formTitle', formTitle || null);
+    await grist.setOption('formSubtitle', formSubtitle || null);
+    currentOptions.formTitle = formTitle || null;
+    currentOptions.formSubtitle = formSubtitle || null;
+
     if (tableChanged) {
       await grist.setOption('tableId', chosenTable);
       await grist.setOption('formConfig', null);
@@ -733,8 +758,7 @@
       mergedConfig = mergeConfig(tableColumns, newConfig);
     }
 
-    document.getElementById('pageTitle').textContent = '📋 ' + targetTableId;
-    document.getElementById('pageSubtitle').textContent = 'Formulaire de saisie pour la table ' + targetTableId + '.';
+    updateHeaderText();
     hideConfig();
     await renderForm(mergedConfig);
   }
