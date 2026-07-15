@@ -105,7 +105,6 @@
   .attachment-item {
     display: flex; align-items: center; gap: 8px;
     font-size: 13px; color: var(--text);
-    text-decoration: none;
     padding: 6px 8px;
     border: 1px solid var(--border);
     border-radius: 8px;
@@ -121,6 +120,47 @@
     object-fit: cover;
   }
   .attachment-item span { overflow-wrap: anywhere; }
+  .attachment-view-btn {
+    border: 1px solid var(--border);
+    background: #f8fafc;
+    border-radius: 6px;
+    font-size: 12px;
+    padding: 4px 9px;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .attachment-view-btn:hover { background: #e2e8f0; }
+
+  /* ---------- Modale d'aperçu de pièce jointe ---------- */
+  .modal-overlay {
+    display: none;
+    position: fixed; inset: 0;
+    background: rgba(0,0,0,0.5);
+    z-index: 200;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+  }
+  .modal-overlay.open { display: flex; }
+  .modal-box {
+    background: white;
+    border-radius: var(--radius, 12px);
+    max-width: 700px;
+    width: 100%;
+    max-height: 85vh;
+    overflow-y: auto;
+    padding: 18px;
+  }
+  .modal-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 14px; }
+  .btn-download {
+    padding: 9px 14px;
+    border-radius: 8px;
+    background: var(--accent);
+    color: white;
+    text-decoration: none;
+    font-size: 13px;
+    font-weight: 600;
+  }
   .field-comment { font-size: 12px; color: var(--muted); margin: -8px 0 6px; line-height: 1.4; }
   .form-section {
     margin: 10px 0 -4px;
@@ -368,6 +408,16 @@
     </div>
   </div>
 
+</div>
+
+<div class="modal-overlay" id="attachPreviewModal">
+  <div class="modal-box">
+    <div id="attachPreviewContent"></div>
+    <div class="modal-actions">
+      <a id="attachPreviewDownload" class="btn-download" target="_blank" rel="noopener" download>⬇️ Télécharger</a>
+      <button type="button" class="secondary" id="attachPreviewClose">Fermer</button>
+    </div>
+  </div>
 </div>
 
 <script>
@@ -1339,6 +1389,8 @@
 
   // Construit l'affichage (vignette pour les images, sinon lien) pour une valeur brute
   // de colonne Pièce(s) jointe(s) — gère le marqueur de liste Grist ["L", id1, id2, ...].
+  // Chaque pièce jointe propose un bouton "Visualiser" (aperçu dans une fenêtre, sans
+  // télécharger de fichier) en plus du téléchargement classique.
   async function renderAttachmentLinks(raw) {
     const ids = Array.isArray(raw) ? (raw[0] === 'L' ? raw.slice(1) : raw) : (raw ? [raw] : []);
     const validIds = ids.filter(id => typeof id === 'number' && id > 0);
@@ -1353,14 +1405,53 @@
       const fileType = idx !== -1 ? String(meta.fileType[idx] || '') : '';
       const url = `${tok.baseUrl}/attachments/${id}/download?auth=${encodeURIComponent(tok.token)}`;
       const isImage = fileType.startsWith('image/');
+      const viewBtn = `<button type="button" class="attachment-view-btn"
+        data-url="${escapeHtml(url)}" data-name="${escapeHtml(fileName)}" data-type="${escapeHtml(fileType)}">👁️ Visualiser</button>`;
       return isImage
-        ? `<a class="attachment-item attachment-image" href="${url}" target="_blank" rel="noopener">
+        ? `<div class="attachment-item attachment-image">
              <img src="${url}" alt="${escapeHtml(fileName)}" />
              <span>${escapeHtml(fileName)}</span>
-           </a>`
-        : `<a class="attachment-item" href="${url}" target="_blank" rel="noopener">📎 ${escapeHtml(fileName)}</a>`;
+             ${viewBtn}
+           </div>`
+        : `<div class="attachment-item">📎 <span>${escapeHtml(fileName)}</span> ${viewBtn}</div>`;
     }).join('') + '</div>';
   }
+
+  // Ouvre la fenêtre d'aperçu pour une pièce jointe : image ou PDF affichés directement,
+  // autres types renvoyés vers le téléchargement (pas d'aperçu natif possible au navigateur).
+  function openAttachmentPreview(url, fileName, fileType) {
+    const content = document.getElementById('attachPreviewContent');
+    if (fileType.startsWith('image/')) {
+      content.innerHTML = `<img src="${url}" alt="${escapeHtml(fileName)}" style="max-width:100%;max-height:70vh;display:block;margin:0 auto;border-radius:8px;" />`;
+    } else if (fileType === 'application/pdf') {
+      content.innerHTML = `<iframe src="${url}" style="width:100%;height:70vh;border:none;" title="${escapeHtml(fileName)}"></iframe>`;
+    } else {
+      content.innerHTML = `<p style="font-size:14px;color:var(--muted);">Aperçu non disponible pour ce type de fichier` +
+        (fileType ? ` (${escapeHtml(fileType)})` : '') +
+        `. Utilisez le téléchargement ci-dessous pour l'ouvrir.</p>`;
+    }
+    const dl = document.getElementById('attachPreviewDownload');
+    dl.href = url;
+    dl.setAttribute('download', fileName);
+    document.getElementById('attachPreviewModal').classList.add('open');
+  }
+
+  // Branche les boutons "Visualiser" présents dans un conteneur donné (à appeler après
+  // toute insertion de renderAttachmentLinks() dans le DOM via innerHTML).
+  function wireAttachmentPreviewButtons(container) {
+    container.querySelectorAll('.attachment-view-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        openAttachmentPreview(btn.dataset.url, btn.dataset.name, btn.dataset.type);
+      });
+    });
+  }
+
+  document.getElementById('attachPreviewClose').addEventListener('click', () => {
+    document.getElementById('attachPreviewModal').classList.remove('open');
+  });
+  document.getElementById('attachPreviewModal').addEventListener('click', (e) => {
+    if (e.target.id === 'attachPreviewModal') document.getElementById('attachPreviewModal').classList.remove('open');
+  });
 
   function setupFormulaPreview(col) {
     const info = formulaPreviewInfo[col.colId];
@@ -1384,6 +1475,7 @@
         try {
           const html = await renderAttachmentLinks(raw);
           el.innerHTML = html || `<span class="formula-preview-placeholder">${escapeHtml(placeholder)}</span>`;
+          wireAttachmentPreviewButtons(el);
         } catch (err) {
           console.error(err);
           el.innerHTML = '<span class="formula-preview-placeholder">Erreur de chargement de la pièce jointe</span>';
