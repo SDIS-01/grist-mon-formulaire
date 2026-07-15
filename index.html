@@ -119,6 +119,13 @@
     color: var(--accent-dark);
   }
   .form-section:first-child { margin-top: 0; }
+  .field-row-2col {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px;
+    align-items: start;
+  }
+  .field-row-2col > div { min-width: 0; }
   button.primary {
     margin-top: 8px;
     padding: 11px;
@@ -253,6 +260,7 @@
     .gear { width: 30px; height: 30px; font-size: 14px; }
     .cfg-row { grid-template-columns: auto 1fr; }
     .cfg-row .order-input { grid-column: 2; justify-self: start; width: 70px; }
+    .field-row-2col { grid-template-columns: 1fr; }
   }
 
   /* ---------- Impression / PDF ---------- */
@@ -625,6 +633,7 @@
         order: (saved && typeof saved.order === 'number') ? saved.order : idx,
         filterParentColId: isRef ? filterParentColId : null,
         filterLinkColId: isRef ? filterLinkColId : null,
+        alignWithNext: saved ? !!saved.alignWithNext : false,
       };
     });
   }
@@ -699,6 +708,9 @@
         </div>
         <label style="display:flex;align-items:center;gap:4px;font-weight:400;font-size:12px;">
           <input type="checkbox" class="cfg-required" ${c.required ? 'checked' : ''} ${c.isFormula ? 'disabled' : ''} /> obligatoire
+        </label>
+        <label style="display:flex;align-items:center;gap:4px;font-weight:400;font-size:12px;grid-column:1 / -1;">
+          <input type="checkbox" class="cfg-align-next" ${c.alignWithNext ? 'checked' : ''} /> ⬌ Aligner avec le champ suivant (deux colonnes)
         </label>
         <input type="number" class="cfg-order order-input" value="${c.order}" />
       </div>
@@ -801,6 +813,7 @@
           order: parseInt(row.querySelector('.cfg-order').value, 10) || 0,
           filterParentColId: filterParentSel ? (filterParentSel.value || null) : null,
           filterLinkColId: filterLinkSel ? (filterLinkSel.value || null) : null,
+          alignWithNext: row.querySelector('.cfg-align-next').checked,
         };
       });
       const sectionRows = document.querySelectorAll('#cfgList .cfg-section-row');
@@ -852,13 +865,23 @@
     const stream = [...fieldItems, ...sectionItems].sort((a, b) => a.order - b.order);
 
     const fieldsHtml = [];
-    for (const item of stream) {
+    for (let i = 0; i < stream.length; i++) {
+      const item = stream[i];
       if (item.kind === 'section') {
         const secColor = item.section.color || '#1B7A3D';
         fieldsHtml.push(`<div class="form-section" style="border-bottom-color:${secColor};"><h2 style="color:${secColor};">${escapeHtml(item.section.title)}</h2></div>`);
-      } else {
-        fieldsHtml.push(await renderField(item.col));
+        continue;
       }
+      // Deux champs consécutifs, alignés en deux colonnes si le premier a "alignWithNext" coché.
+      const next = stream[i + 1];
+      if (item.col.alignWithNext && next && next.kind === 'field') {
+        const htmlA = await renderField(item.col);
+        const htmlB = await renderField(next.col);
+        fieldsHtml.push(`<div class="field-row-2col">${htmlA}${htmlB}</div>`);
+        i++; // le champ suivant vient d'être consommé dans la paire
+        continue;
+      }
+      fieldsHtml.push(await renderField(item.col));
     }
 
     formEl.innerHTML = fieldsHtml.join('') + '<button type="submit" class="primary">Envoyer</button>';
@@ -1061,6 +1084,28 @@
     return String(raw);
   }
 
+  // Formate une date/heure brute (timestamp Unix en secondes, tel que renvoyé par Grist)
+  // au format DD/MM/YY. Pour les DateTime, l'heure (HH:MM) est ajoutée à la suite.
+  // Les dates (sans heure) sont interprétées en UTC pour éviter tout décalage de fuseau
+  // horaire qui ferait basculer sur le jour précédent/suivant.
+  function formatDatePreviewValue(raw, type) {
+    if (raw === null || raw === undefined || raw === '') return '';
+    const num = Number(raw);
+    if (Number.isNaN(num)) return String(raw);
+    const isDateTime = type.startsWith('DateTime');
+    const d = new Date(num * 1000);
+    const dd = String(isDateTime ? d.getDate() : d.getUTCDate()).padStart(2, '0');
+    const mm = String((isDateTime ? d.getMonth() : d.getUTCMonth()) + 1).padStart(2, '0');
+    const yy = String(isDateTime ? d.getFullYear() : d.getUTCFullYear()).slice(-2);
+    let result = `${dd}/${mm}/${yy}`;
+    if (isDateTime) {
+      const hh = String(d.getHours()).padStart(2, '0');
+      const min = String(d.getMinutes()).padStart(2, '0');
+      result += ` ${hh}:${min}`;
+    }
+    return result;
+  }
+
   // Construit le HTML affiché dans le bloc d'aperçu d'un champ formule. Gère deux cas :
   // - Une liste Grist native (RefList/ChoiceList), représentée en interne par
   //   ["L", élément1, élément2, ...] : on retire ce marqueur "L" avant affichage.
@@ -1074,6 +1119,9 @@
     }
     if (type === 'Numeric' || type === 'Int') {
       return escapeHtml(formatPreviewValue(raw, type, widgetOptionsStr));
+    }
+    if (type === 'Date' || type.startsWith('DateTime')) {
+      return escapeHtml(formatDatePreviewValue(raw, type));
     }
 
     let items;
