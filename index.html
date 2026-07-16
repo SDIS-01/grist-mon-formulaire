@@ -153,6 +153,15 @@
   .post-submit-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 10px; }
   .post-submit-actions .btn-download { display: inline-block; }
   .post-submit-actions button.secondary { padding: 9px 14px; }
+  .attach-embed-block { margin-top: 14px; }
+  .attach-embed-title { font-size: 13px; font-weight: 700; margin-bottom: 8px; }
+  .attach-embed-iframe {
+    border: none;
+    width: 100%;
+    height: 480px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+  }
   button.primary {
     margin-top: 8px;
     padding: 11px;
@@ -1698,10 +1707,11 @@
 
       // Si un formulaire natif de pièce jointe est configuré, on récupère la clé de
       // liaison générée par Grist sur la ligne qu'on vient de créer (formule déclenchée
-      // côté document), puis on propose un bouton avec le lien pré-rempli.
+      // côté document), puis on intègre directement ce formulaire (iframe), sans ouvrir
+      // de nouvel onglet — l'upload y fonctionne nativement (pas concerné par le bug CORS).
       const attachArea = document.getElementById('attachActionArea');
       attachArea.innerHTML = '';
-      const postSubmitButtons = [];
+      let attachIframeHtml = '';
 
       if (currentOptions.attachFormUrl) {
         try {
@@ -1724,18 +1734,21 @@
           if (keyValue) {
             const sep = currentOptions.attachFormUrl.includes('?') ? '&' : '?';
             const url = currentOptions.attachFormUrl + sep + encodeURIComponent(keyCol) + '=' + encodeURIComponent(keyValue);
-            postSubmitButtons.push(`<a class="btn-download" href="${escapeHtml(url)}" target="_blank" rel="noopener">📎 Ajouter des pièces jointes</a>`);
+            attachIframeHtml = `
+              <div class="attach-embed-block">
+                <div class="attach-embed-title">📎 Ajoutez vos pièces jointes ci-dessous :</div>
+                <iframe src="${escapeHtml(url)}" class="attach-embed-iframe" title="Formulaire pièce jointe"></iframe>
+              </div>`;
           } else {
             console.error('Clé de liaison introuvable après plusieurs tentatives (colonne "' + keyCol + '" bien présente et remplie ?)');
           }
         } catch (err) {
-          console.error('Impossible de préparer le lien pièce jointe :', err);
+          console.error('Impossible de préparer le formulaire de pièce jointe :', err);
         }
       }
 
-      postSubmitButtons.push('<button type="button" class="secondary" id="newRequestBtn">🔄 Faire une nouvelle demande</button>');
-
-      attachArea.innerHTML = '<div class="post-submit-actions">' + postSubmitButtons.join('') + '</div>';
+      const newRequestBtnHtml = '<div class="post-submit-actions"><button type="button" class="secondary" id="newRequestBtn">🔄 Faire une nouvelle demande</button></div>';
+      attachArea.innerHTML = attachIframeHtml + newRequestBtnHtml;
       document.getElementById('newRequestBtn').addEventListener('click', () => {
         fullFormReset(e.target);
         hideMsg();
