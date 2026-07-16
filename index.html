@@ -197,6 +197,16 @@
   .post-submit-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 10px; }
   .post-submit-actions .btn-download { display: inline-block; }
   .post-submit-actions button.secondary { padding: 9px 14px; }
+  .new-request-btn {
+    padding: 12px 20px !important;
+    font-size: 14px !important;
+    box-shadow: 0 2px 8px rgba(0,102,179,0.35);
+    animation: pulse-request 1.8s ease-in-out 2;
+  }
+  @keyframes pulse-request {
+    0%, 100% { transform: scale(1); }
+    50% { transform: scale(1.04); }
+  }
   .attach-embed-block { margin-top: 14px; }
   .attach-embed-title { font-size: 13px; font-weight: 700; margin-bottom: 8px; }
   .attach-embed-iframe {
@@ -1963,14 +1973,11 @@
         if (value !== null) fields[col.colId] = value;
       }
 
-      // On note l'id maximum existant AVANT la création, pour repérer de façon fiable
-      // la nouvelle ligne juste après (la forme exacte du retour de table.create()
-      // n'étant pas garantie selon les versions/contextes de l'API Grist).
-      const beforeData = await grist.docApi.fetchTable(targetTableId);
-      const maxIdBefore = beforeData.id.length ? Math.max(...beforeData.id) : 0;
-
       const table = grist.getTable(targetTableId);
-      await table.create({ fields });
+      const created = await table.create({ fields });
+      const newRowId = created && typeof created === 'object'
+        ? (Array.isArray(created) ? created[0].id : created.id)
+        : null;
 
       showMsg('success', '✓ Enregistrement ajouté avec succès. Que souhaitez-vous faire ?');
 
@@ -1982,22 +1989,20 @@
       attachArea.innerHTML = '';
       let attachIframeHtml = '';
 
-      if (currentOptions.attachFormUrl) {
+      if (currentOptions.attachFormUrl && newRowId) {
         try {
           const keyCol = currentOptions.attachKeyCol || 'CleLien';
-          // La formule déclenchée qui calcule CleLien peut prendre un instant côté
-          // serveur : on retente quelques fois avant d'abandonner.
+          // La création d'une ligne peut déclencher en cascade de nombreux recalculs de
+          // formules côté serveur (colonnes calculées, lookups...) avant que CleLien ne
+          // soit définitivement disponible : on patiente plus longtemps et on retente
+          // davantage qu'avant.
           let keyValue = null;
-          for (let attempt = 0; attempt < 5 && !keyValue; attempt++) {
-            if (attempt > 0) await new Promise(r => setTimeout(r, 400));
+          for (let attempt = 0; attempt < 12 && !keyValue; attempt++) {
+            if (attempt > 0) await new Promise(r => setTimeout(r, 500));
             const fresh = await grist.docApi.fetchTable(targetTableId);
-            const newIds = fresh.id.filter(id => id > maxIdBefore);
-            if (newIds.length) {
-              const newRowId = Math.max(...newIds);
-              const idx = fresh.id.indexOf(newRowId);
-              if (idx !== -1 && fresh[keyCol] && fresh[keyCol][idx]) {
-                keyValue = fresh[keyCol][idx];
-              }
+            const idx = fresh.id.indexOf(newRowId);
+            if (idx !== -1 && fresh[keyCol] && fresh[keyCol][idx]) {
+              keyValue = fresh[keyCol][idx];
             }
           }
           if (keyValue) {
@@ -2016,7 +2021,7 @@
         }
       }
 
-      const newRequestBtnHtml = '<div class="post-submit-actions"><button type="button" class="secondary" id="newRequestBtn">🔄 Faire une nouvelle demande</button></div>';
+      const newRequestBtnHtml = '<div class="post-submit-actions"><button type="button" class="primary new-request-btn" id="newRequestBtn">🔄 Faire une nouvelle demande</button></div>';
       attachArea.innerHTML = attachIframeHtml + newRequestBtnHtml;
       document.getElementById('newRequestBtn').addEventListener('click', () => {
         fullFormReset(e.target);
