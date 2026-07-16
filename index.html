@@ -774,19 +774,8 @@
       ('Formulaire de saisie pour la table ' + targetTableId + '.');
     document.getElementById('pageTitle').textContent = '📋 ' + title;
     document.getElementById('pageSubtitle').textContent = subtitle;
-
-    // Boutons de lien externes : un par entrée de la liste, uniquement si une URL est renseignée.
-    const linksEl = document.getElementById('externalLinks');
-    if (linksEl) {
-      linksEl.innerHTML = externalLinksList
-        .filter(l => l.url && l.url.trim())
-        .map(l => {
-          const c = LINK_COLORS[l.color] || LINK_COLORS.neutral;
-          return `<a class="external-link-btn" href="${escapeHtml(l.url)}" target="_blank" rel="noopener"
-            style="background:${c.bg};color:${c.text};border-color:${c.border};">${escapeHtml(l.label || l.url)}</a>`;
-        })
-        .join('');
-    }
+    // Les liens externes ne s'affichent plus ici : ils sont désormais positionnés dans
+    // le flux du formulaire (donc dans l'onglet/chapitre correspondant à leur ordre).
   }
 
   function mergeConfig(columns, savedConfig) {
@@ -1000,6 +989,7 @@
         <input type="text" class="cfg-link-label" value="${escapeHtml(l.label)}" placeholder="Libellé (ex. Voir le Kanban)" />
         <input type="text" class="cfg-link-url" value="${escapeHtml(l.url)}" placeholder="https://..." />
         <div class="cfg-color-picker cfg-link-colors">${swatches}</div>
+        <input type="number" class="cfg-order cfg-link-order" value="${typeof l.order === 'number' ? l.order : 0}" title="Ordre d'affichage (place ce lien dans le chapitre/onglet correspondant)" />
         <button type="button" class="secondary cfg-link-delete" title="Supprimer ce lien">🗑️</button>
       </div>
     `;
@@ -1025,11 +1015,14 @@
   }
 
   function addExternalLink() {
+    const allOrders = [...mergedConfig.map(c => c.order), ...formSections.map(s => s.order), ...formSubsections.map(s => s.order), ...externalLinksList.map(l => l.order || 0)];
+    const maxOrder = allOrders.length ? Math.max(...allOrders) : 0;
     externalLinksList.push({
       id: 'link_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
       label: 'Nouveau lien',
       url: '',
       color: 'neutral',
+      order: maxOrder + 1,
     });
     renderLinksList();
   }
@@ -1085,6 +1078,7 @@
       label: row.querySelector('.cfg-link-label').value.trim() || 'Lien',
       url: row.querySelector('.cfg-link-url').value.trim(),
       color: row.dataset.chosenColor || 'neutral',
+      order: parseInt(row.querySelector('.cfg-link-order').value, 10) || 0,
     })).filter(l => l.url); // on ignore les lignes sans URL renseignée
     await grist.setOption('externalLinksList', newLinks);
     await grist.setOption('kanbanUrl', null);
@@ -1181,11 +1175,12 @@
     const fieldItems = included.map(c => ({ kind: 'field', order: c.order, col: c }));
     const sectionItems = formSections.map(s => ({ kind: 'section', order: s.order, section: s }));
     const subsectionItems = formSubsections.map(s => ({ kind: 'subsection', order: s.order, subsection: s }));
-    const stream = [...fieldItems, ...sectionItems, ...subsectionItems].sort((a, b) => a.order - b.order);
+    const linkItems = externalLinksList.filter(l => l.url && l.url.trim()).map(l => ({ kind: 'link', order: l.order || 0, link: l }));
+    const stream = [...fieldItems, ...sectionItems, ...subsectionItems, ...linkItems].sort((a, b) => a.order - b.order);
 
-    // Chaque chapitre devient un onglet. Les sous-chapitres restent à l'intérieur de
-    // l'onglet courant (simple titre intercalé, pas de nouvel onglet). Les champs
-    // placés avant le premier chapitre (s'il y en a) forment un onglet "Général" implicite.
+    // Chaque chapitre devient un onglet. Les sous-chapitres et les liens restent à
+    // l'intérieur de l'onglet courant (pas de nouvel onglet). Les champs placés avant
+    // le premier chapitre (s'il y en a) forment un onglet "Général" implicite.
     const GATE_TAB_TITLE = 'Consulter et saisir';
     const PRE_GATE_LABELS = ['Porteur', 'Projet_Action par Porteur']; // toujours visibles, avant les champs bloquants
     const GATE_FIELD_LABELS = ['Projet PEPS / Action AV', 'Projet PEPS - Action AV_MEO'];
@@ -1201,12 +1196,12 @@
           currentTab = { id: 'tab_intro', title: null, color: null, items: [] };
           tabs.push(currentTab);
         }
-        currentTab.items.push(item); // champs ET sous-chapitres
+        currentTab.items.push(item); // champs, sous-chapitres ET liens
       }
     }
 
-    // Rendu d'une liste d'items (champs et/ou titres de sous-chapitre), avec gestion
-    // du couplage 2-colonnes existant pour les champs.
+    // Rendu d'une liste d'items (champs, titres de sous-chapitre, ou liens externes),
+    // avec gestion du couplage 2-colonnes existant pour les champs.
     async function renderFieldItems(items) {
       const html = [];
       for (let i = 0; i < items.length; i++) {
@@ -1215,6 +1210,13 @@
           const s = item.subsection;
           const color = s.color || '#1B7A3D';
           html.push(`<div class="form-subsection" style="border-bottom-color:${color};"><h3 style="color:${color};">${escapeHtml(s.title)}</h3></div>`);
+          continue;
+        }
+        if (item.kind === 'link') {
+          const l = item.link;
+          const c = LINK_COLORS[l.color] || LINK_COLORS.neutral;
+          html.push(`<a class="external-link-btn" href="${escapeHtml(l.url)}" target="_blank" rel="noopener"
+            style="background:${c.bg};color:${c.text};border-color:${c.border};">${escapeHtml(l.label || l.url)}</a>`);
           continue;
         }
         const next = items[i + 1];
