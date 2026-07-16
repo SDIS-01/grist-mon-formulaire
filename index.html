@@ -476,6 +476,8 @@
   let currentOptions = null;
   let comboState = {};        // colId -> option sélectionnée (Ref) ou tableau (RefList)
   let gateFieldColIds = [];   // colId des 2 champs bloquants de l'onglet "Consulter et saisir"
+  let fieldTabMap = {};       // colId -> id de l'onglet qui le contient (pour la validation)
+  let activateTab = null;     // fonction (assignée dans renderForm) pour changer d'onglet actif
   let comboOptionsCache = {}; // colId -> options triées disponibles pour le combobox
   let docTablesMeta = null;   // cache de _grist_Tables (toutes les tables du document)
   let dependencyInfo = {};    // colId enfant -> { parentColId, linkColId, targetTable }
@@ -1233,6 +1235,7 @@
     }
 
     gateFieldColIds = [];
+    fieldTabMap = {};
     const tabButtonsHtml = [];
     const tabPanelsHtml = [];
 
@@ -1242,6 +1245,8 @@
       const label = tab.title || 'Général';
       const color = tab.color || 'var(--accent)';
       tabButtonsHtml.push(`<button type="button" class="form-tab-btn${isActive ? ' active' : ''}" data-tab-id="${tab.id}" style="--tab-color:${color};">${escapeHtml(label)}</button>`);
+
+      tab.items.filter(it => it.kind === 'field').forEach(it => { fieldTabMap[it.col.colId] = tab.id; });
 
       let panelHtml;
       if (tab.title && tab.title.trim() === GATE_TAB_TITLE) {
@@ -1288,15 +1293,20 @@
     });
 
     // Navigation entre onglets (masquage CSS uniquement : les champs des autres onglets
-    // restent dans le DOM et fonctionnent normalement en arrière-plan).
+    // restent dans le DOM et fonctionnent normalement en arrière-plan). Fonction
+    // réutilisable (stockée dans la variable globale activateTab), aussi appelée par
+    // la validation pour rediriger vers l'onglet contenant un champ obligatoire manquant.
+    activateTab = function (tabId) {
+      formEl.querySelectorAll('.form-tab-btn').forEach(b => b.classList.remove('active'));
+      formEl.querySelectorAll('.form-tab-panel').forEach(p => p.classList.remove('active'));
+      const btn = formEl.querySelector(`.form-tab-btn[data-tab-id="${tabId}"]`);
+      const panel = formEl.querySelector(`.form-tab-panel[data-tab-id="${tabId}"]`);
+      if (btn) btn.classList.add('active');
+      if (panel) panel.classList.add('active');
+    };
+
     formEl.querySelectorAll('.form-tab-btn').forEach(btn => {
-      btn.addEventListener('click', () => {
-        formEl.querySelectorAll('.form-tab-btn').forEach(b => b.classList.remove('active'));
-        formEl.querySelectorAll('.form-tab-panel').forEach(p => p.classList.remove('active'));
-        btn.classList.add('active');
-        const panel = formEl.querySelector(`.form-tab-panel[data-tab-id="${btn.dataset.tabId}"]`);
-        if (panel) panel.classList.add('active');
-      });
+      btn.addEventListener('click', () => activateTab(btn.dataset.tabId));
     });
 
     included
@@ -1349,7 +1359,12 @@
   async function renderField(col) {
     const id = 'f_' + col.colId;
     const type = col.type;
-    const reqAttr = col.required ? 'required' : '';
+    // L'attribut HTML "required" natif est volontairement désactivé : un champ masqué
+    // (display:none, dans un onglet non actif) est exempté de la validation navigateur,
+    // ce qui rendait le caractère obligatoire inefficace hors de l'onglet actif. La
+    // validation des champs obligatoires est maintenant entièrement faite en JS, sur
+    // tous les onglets, juste avant l'envoi (voir validateRequiredFields()).
+    const reqAttr = '';
     const reqMark = col.required ? ' <span class="req">*</span>' : '';
 
     // Colonne formule : affichage informatif, non modifiable, non envoyée.
@@ -1830,8 +1845,54 @@
     return ids.length ? ['L', ...ids] : null;
   }
 
+  // Vérifie les champs obligatoires — uniquement ceux de l'onglet actuellement actif.
+  // Les onglets sont traités comme des parcours indépendants : utiliser l'un ne doit
+  // jamais exiger de remplir les champs obligatoires d'un autre onglet.
+  function validateRequiredFields() {
+    const activePanel = document.querySelector('.form-tab-panel.active');
+    const activeTabId = activePanel ? activePanel.dataset.tabId : null;
+
+    const missing = [];
+    mergedConfig.filter(c => c.included && c.required && !c.isFormula).forEach(c => {
+      // Un champ obligatoire situé dans un autre onglet que celui actuellement actif
+      // n'est pas concerné par cette soumission.
+      const tabId = fieldTabMap[c.colId];
+      if (tabId !== undefined && activeTabId !== null && tabId !== activeTabId) return;
+
+      let isEmpty;
+      if (c.type.startsWith('RefList:') || c.type === 'ChoiceList') {
+        const state = comboState[c.colId];
+        isEmpty = !Array.isArray(state) || state.length === 0;
+      } else if (c.type.startsWith('Ref:') || c.type === 'Choice') {
+        isEmpty = !comboState[c.colId];
+      } else if (c.type === 'Bool') {
+        isEmpty = false; // une case non cochée reste une réponse valide ("Non"), jamais bloquant
+      } else if (c.type === 'Attachments') {
+        const el = document.getElementById('f_' + c.colId);
+        isEmpty = !el || !el.files || el.files.length === 0;
+      } else {
+        const el = document.getElementById('f_' + c.colId);
+        isEmpty = !el || el.value === '';
+      }
+      if (isEmpty) missing.push({ colId: c.colId, label: c.label });
+    });
+    return missing;
+  }
+
   async function handleSubmit(e) {
     e.preventDefault();
+
+    const missingFields = validateRequiredFields();
+    if (missingFields.length) {
+      const first = missingFields[0];
+      const tabId = fieldTabMap[first.colId];
+      if (tabId && activateTab) activateTab(tabId);
+      showMsg('error', '⚠️ Champ(s) obligatoire(s) manquant(s) : ' + missingFields.map(f => f.label).join(', '));
+      const el = document.getElementById('f_' + first.colId);
+      if (el) el.focus();
+      return;
+    }
+
     const btn = e.target.querySelector('button[type="submit"]');
     btn.disabled = true;
     hideMsg();
