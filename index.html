@@ -142,6 +142,19 @@
     color: var(--accent-dark);
   }
   .form-section:first-child { margin-top: 0; }
+  .form-subsection {
+    margin: 8px 0 -4px;
+    padding-bottom: 4px;
+    border-bottom: 1px dashed var(--accent);
+  }
+  .form-subsection h3 {
+    margin: 0;
+    font-size: 13px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.02em;
+  }
+  .form-subsection:first-child { margin-top: 0; }
 
   /* ---------- Onglets (un par chapitre) ---------- */
   .form-tabs-nav {
@@ -259,6 +272,7 @@
   .cfg-col-name { font-size: 12px; color: var(--muted); }
   .cfg-comment { margin-top: 6px; font-size: 12px; }
   .cfg-section-row { background: #f0fdf4; border-color: #bbf7d0; }
+  .cfg-subsection-row { background: #eff6ff; border-color: #bfdbfe; }
   .cfg-link-row {
     display: grid;
     grid-template-columns: 1fr 2fr auto auto;
@@ -420,6 +434,7 @@
     <div class="subtitle">Cochez les champs à afficher, renommez-les si besoin, marquez-les obligatoires et fixez leur ordre. Les colonnes formule sont affichées en lecture seule (grisées) dans le formulaire.</div>
     <div style="margin-bottom:10px;">
       <button type="button" class="secondary" id="cfgAddSection">📖 Ajouter un chapitre</button>
+      <button type="button" class="secondary" id="cfgAddSubsection">📑 Ajouter un sous-chapitre</button>
     </div>
     <div id="cfgList"></div>
     <div class="cfg-actions">
@@ -438,7 +453,8 @@
   let allDocColumns = null;   // raw _grist_Tables_column fetch, whole doc
   let tableColumns = [];      // column meta for targetTableId
   let mergedConfig = [];
-  let formSections = []; // chapitres : [{ id, title, order }]
+  let formSections = []; // chapitres (= onglets) : [{ id, title, order, color }]
+  let formSubsections = []; // sous-chapitres (titres à l'intérieur d'un onglet) : [{ id, title, order, color }]
   let externalLinksList = []; // liens externes personnalisés : [{ id, label, url }]
 
   // Charge la liste de liens externes, avec migration automatique depuis les deux
@@ -545,6 +561,7 @@
   });
   document.getElementById('setupSave').addEventListener('click', saveSetup);
   document.getElementById('cfgAddSection').addEventListener('click', addSection);
+  document.getElementById('cfgAddSubsection').addEventListener('click', addSubsection);
   document.getElementById('cfgAddLink').addEventListener('click', addExternalLink);
 
   async function bootstrap() {
@@ -569,6 +586,7 @@
     await loadColumnsFor(targetTableId);
     mergedConfig = mergeConfig(tableColumns, currentOptions.formConfig);
     formSections = currentOptions.formSections || [];
+    formSubsections = currentOptions.formSubsections || [];
     externalLinksList = loadExternalLinks();
     updateHeaderText();
 
@@ -601,6 +619,7 @@
     await loadColumnsFor(targetTableId);
     mergedConfig = mergeConfig(tableColumns, currentOptions.formConfig);
     formSections = currentOptions.formSections || [];
+    formSubsections = currentOptions.formSubsections || [];
     externalLinksList = loadExternalLinks();
     updateHeaderText();
     await renderForm(mergedConfig);
@@ -851,24 +870,30 @@
     const list = document.getElementById('cfgList');
     const fieldItems = mergedConfig.map(c => ({ kind: 'field', order: c.order, data: c }));
     const sectionItems = formSections.map(s => ({ kind: 'section', order: s.order, data: s }));
-    const sorted = [...fieldItems, ...sectionItems].sort((a, b) => a.order - b.order);
+    const subsectionItems = formSubsections.map(s => ({ kind: 'subsection', order: s.order, data: s }));
+    const sorted = [...fieldItems, ...sectionItems, ...subsectionItems].sort((a, b) => a.order - b.order);
     list.innerHTML = sorted.map(item => {
-      if (item.kind === 'section') {
+      if (item.kind === 'section' || item.kind === 'subsection') {
         const s = item.data;
+        const isSub = item.kind === 'subsection';
         const currentColor = s.color || SECTION_COLORS[3].value;
         const swatches = SECTION_COLORS.map(c => `
           <button type="button" class="cfg-color-swatch${c.value === currentColor ? ' selected' : ''}"
             data-color="${c.value}" title="${c.label}" style="background:${c.value};"></button>
         `).join('');
+        const rowClass = isSub ? 'cfg-subsection-row' : 'cfg-section-row';
+        const dataAttr = isSub ? `data-subsection="${s.id}"` : `data-section="${s.id}"`;
+        const deleteClass = isSub ? 'cfg-subsection-delete' : 'cfg-section-delete';
+        const titleClass = isSub ? 'cfg-subsection-title' : 'cfg-section-title';
         return `
-      <div class="cfg-row cfg-section-row" data-section="${s.id}" data-chosen-color="${currentColor}">
-        <div style="font-size:18px;">📖</div>
+      <div class="cfg-row ${rowClass}" ${dataAttr} data-chosen-color="${currentColor}">
+        <div style="font-size:18px;">${isSub ? '📑' : '📖'}</div>
         <div>
-          <input type="text" class="cfg-section-title" value="${escapeHtml(s.title)}" placeholder="Titre du chapitre" />
-          <div class="cfg-col-name">Chapitre</div>
+          <input type="text" class="${titleClass}" value="${escapeHtml(s.title)}" placeholder="Titre du ${isSub ? 'sous-chapitre' : 'chapitre'}" />
+          <div class="cfg-col-name">${isSub ? 'Sous-chapitre (dans l\'onglet courant)' : 'Chapitre (= un onglet)'}</div>
           <div class="cfg-color-picker">${swatches}</div>
         </div>
-        <button type="button" class="secondary cfg-section-delete" title="Supprimer ce chapitre" style="padding:6px 10px;">🗑️</button>
+        <button type="button" class="secondary ${deleteClass}" title="Supprimer" style="padding:6px 10px;">🗑️</button>
         <input type="number" class="cfg-order order-input" value="${s.order}" />
       </div>`;
       }
@@ -904,7 +929,16 @@
       });
     });
 
-    list.querySelectorAll('.cfg-section-row').forEach(row => {
+    list.querySelectorAll('.cfg-subsection-delete').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const row = btn.closest('.cfg-subsection-row');
+        const subId = row.dataset.subsection;
+        formSubsections = formSubsections.filter(s => s.id !== subId);
+        renderConfigList();
+      });
+    });
+
+    list.querySelectorAll('.cfg-section-row, .cfg-subsection-row').forEach(row => {
       row.querySelectorAll('.cfg-color-swatch').forEach(btn => {
         btn.addEventListener('click', () => {
           row.dataset.chosenColor = btn.dataset.color;
@@ -916,11 +950,23 @@
   }
 
   function addSection() {
-    const allOrders = [...mergedConfig.map(c => c.order), ...formSections.map(s => s.order)];
+    const allOrders = [...mergedConfig.map(c => c.order), ...formSections.map(s => s.order), ...formSubsections.map(s => s.order)];
     const maxOrder = allOrders.length ? Math.max(...allOrders) : 0;
     formSections.push({
       id: 'sec_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
       title: 'Nouveau chapitre',
+      order: maxOrder + 1,
+      color: SECTION_COLORS[3].value,
+    });
+    renderConfigList();
+  }
+
+  function addSubsection() {
+    const allOrders = [...mergedConfig.map(c => c.order), ...formSections.map(s => s.order), ...formSubsections.map(s => s.order)];
+    const maxOrder = allOrders.length ? Math.max(...allOrders) : 0;
+    formSubsections.push({
+      id: 'subsec_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+      title: 'Nouveau sous-chapitre',
       order: maxOrder + 1,
       color: SECTION_COLORS[3].value,
     });
@@ -1052,10 +1098,13 @@
       await grist.setOption('tableId', chosenTable);
       await grist.setOption('formConfig', null);
       await grist.setOption('formSections', null);
+      await grist.setOption('formSubsections', null);
       currentOptions.tableId = chosenTable;
       currentOptions.formConfig = null;
       currentOptions.formSections = null;
+      currentOptions.formSubsections = null;
       formSections = [];
+      formSubsections = [];
       targetTableId = chosenTable;
       await loadColumnsFor(targetTableId);
       mergedConfig = mergeConfig(tableColumns, null);
@@ -1083,11 +1132,21 @@
         order: parseInt(row.querySelector('.cfg-order').value, 10) || 0,
         color: row.dataset.chosenColor || SECTION_COLORS[3].value,
       }));
+      const subsectionRows = document.querySelectorAll('#cfgList .cfg-subsection-row');
+      const newSubsections = Array.from(subsectionRows).map(row => ({
+        id: row.dataset.subsection,
+        title: row.querySelector('.cfg-subsection-title').value.trim() || 'Sous-chapitre',
+        order: parseInt(row.querySelector('.cfg-order').value, 10) || 0,
+        color: row.dataset.chosenColor || SECTION_COLORS[3].value,
+      }));
       await grist.setOption('formConfig', newConfig);
       await grist.setOption('formSections', newSections);
+      await grist.setOption('formSubsections', newSubsections);
       currentOptions.formConfig = newConfig;
       currentOptions.formSections = newSections;
+      currentOptions.formSubsections = newSubsections;
       formSections = newSections;
+      formSubsections = newSubsections;
       mergedConfig = mergeConfig(tableColumns, newConfig);
     }
 
@@ -1121,10 +1180,12 @@
     // Fusionne les champs et les chapitres dans un seul flux, trié par ordre commun.
     const fieldItems = included.map(c => ({ kind: 'field', order: c.order, col: c }));
     const sectionItems = formSections.map(s => ({ kind: 'section', order: s.order, section: s }));
-    const stream = [...fieldItems, ...sectionItems].sort((a, b) => a.order - b.order);
+    const subsectionItems = formSubsections.map(s => ({ kind: 'subsection', order: s.order, subsection: s }));
+    const stream = [...fieldItems, ...sectionItems, ...subsectionItems].sort((a, b) => a.order - b.order);
 
-    // Chaque chapitre devient un onglet. Les champs placés avant le premier chapitre
-    // (s'il y en a) forment un onglet "Général" implicite.
+    // Chaque chapitre devient un onglet. Les sous-chapitres restent à l'intérieur de
+    // l'onglet courant (simple titre intercalé, pas de nouvel onglet). Les champs
+    // placés avant le premier chapitre (s'il y en a) forment un onglet "Général" implicite.
     const GATE_TAB_TITLE = 'Consulter et saisir';
     const PRE_GATE_LABELS = ['Porteur', 'Projet_Action par Porteur']; // toujours visibles, avant les champs bloquants
     const GATE_FIELD_LABELS = ['Projet PEPS / Action AV', 'Projet PEPS - Action AV_MEO'];
@@ -1140,17 +1201,24 @@
           currentTab = { id: 'tab_intro', title: null, color: null, items: [] };
           tabs.push(currentTab);
         }
-        currentTab.items.push(item);
+        currentTab.items.push(item); // champs ET sous-chapitres
       }
     }
 
-    // Rendu d'une liste d'items "champ" (avec gestion du couplage 2-colonnes existant).
+    // Rendu d'une liste d'items (champs et/ou titres de sous-chapitre), avec gestion
+    // du couplage 2-colonnes existant pour les champs.
     async function renderFieldItems(items) {
       const html = [];
       for (let i = 0; i < items.length; i++) {
         const item = items[i];
+        if (item.kind === 'subsection') {
+          const s = item.subsection;
+          const color = s.color || '#1B7A3D';
+          html.push(`<div class="form-subsection" style="border-bottom-color:${color};"><h3 style="color:${color};">${escapeHtml(s.title)}</h3></div>`);
+          continue;
+        }
         const next = items[i + 1];
-        if (item.col.alignWithNext && next) {
+        if (item.col.alignWithNext && next && next.kind === 'field') {
           const htmlA = await renderField(item.col);
           const htmlB = await renderField(next.col);
           html.push(`<div class="field-row-2col">${htmlA}${htmlB}</div>`);
@@ -1177,14 +1245,14 @@
       if (tab.title && tab.title.trim() === GATE_TAB_TITLE) {
         // Onglet "Consulter et saisir" : "Porteur" et "Projet_Action par Porteur"
         // s'affichent en premier (toujours visibles), suivis des 2 champs déclencheurs
-        // (toujours visibles), puis le reste de l'onglet est masqué tant que les 2
-        // champs déclencheurs ne sont pas tous les deux remplis.
+        // (toujours visibles), puis le reste de l'onglet (champs ET sous-chapitres) est
+        // masqué tant que les 2 champs déclencheurs ne sont pas tous les deux remplis.
         const preItems = PRE_GATE_LABELS
-          .map(lbl => tab.items.find(it => (it.col.label || '').trim() === lbl))
+          .map(lbl => tab.items.find(it => it.kind === 'field' && (it.col.label || '').trim() === lbl))
           .filter(Boolean);
-        const gateItems = tab.items.filter(it => GATE_FIELD_LABELS.includes((it.col.label || '').trim()));
-        const handledLabels = [...PRE_GATE_LABELS, ...GATE_FIELD_LABELS];
-        const restItems = tab.items.filter(it => !handledLabels.includes((it.col.label || '').trim()));
+        const gateItems = tab.items.filter(it => it.kind === 'field' && GATE_FIELD_LABELS.includes((it.col.label || '').trim()));
+        const handledColIds = new Set([...preItems, ...gateItems].map(it => it.col.colId));
+        const restItems = tab.items.filter(it => !(it.kind === 'field' && handledColIds.has(it.col.colId)));
         gateFieldColIds = gateItems.map(it => it.col.colId);
         const preHtml = await renderFieldItems(preItems);
         const gateHtml = await renderFieldItems(gateItems);
