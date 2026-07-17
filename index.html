@@ -1658,6 +1658,33 @@
     }).join('') + '</div>';
   }
 
+  // Résout une valeur brute de colonne Référence/RéférenceListe (un ou plusieurs
+  // numéros de ligne internes) en texte affichable, en utilisant la "colonne à
+  // afficher" configurée sur cette colonne dans Grist (visibleCol) — le même principe
+  // que pour les listes déroulantes, mais appliqué ici à un champ formule en lecture seule.
+  async function resolveRefDisplayValue(rawValue, colType, visibleColId) {
+    if (rawValue === null || rawValue === undefined || rawValue === '') return null;
+    const targetTable = colType.split(':')[1];
+    if (!refOptionsCache[targetTable]) {
+      refOptionsCache[targetTable] = await grist.docApi.fetchTable(targetTable);
+    }
+    const data = refOptionsCache[targetTable];
+
+    let displayColId = null;
+    if (visibleColId && allDocColumns) {
+      const idx = allDocColumns.id.indexOf(visibleColId);
+      if (idx !== -1) displayColId = allDocColumns.colId[idx];
+    }
+
+    const ids = Array.isArray(rawValue) ? (rawValue[0] === 'L' ? rawValue.slice(1) : rawValue) : [rawValue];
+    const labels = ids.map(id => {
+      const idx = data.id.indexOf(id);
+      if (idx === -1) return '#' + id;
+      return displayColId && data[displayColId] ? String(data[displayColId][idx]) : '#' + id;
+    });
+    return colType.startsWith('RefList:') ? labels.join(', ') : (labels[0] || null);
+  }
+
   function setupFormulaPreview(col) {
     const info = formulaPreviewInfo[col.colId];
     if (!info) return;
@@ -1674,7 +1701,7 @@
       }
       const targetId = typeof refValue === 'string' ? parseInt(refValue, 10) : refValue;
       const idx = data.id.indexOf(targetId);
-      const raw = idx !== -1 ? data[info.subColId][idx] : null;
+      let raw = idx !== -1 ? data[info.subColId][idx] : null;
 
       if (col.type === 'Attachments') {
         try {
@@ -1685,6 +1712,16 @@
           el.innerHTML = '<span class="formula-preview-placeholder">Erreur de chargement de la pièce jointe</span>';
         }
         return;
+      }
+
+      // Le champ formule renvoie lui-même une Référence/RéférenceListe : on résout le(s)
+      // numéro(s) de ligne interne(s) en texte affichable avant de les montrer.
+      if (col.type.startsWith('Ref:') || col.type.startsWith('RefList:')) {
+        try {
+          raw = await resolveRefDisplayValue(raw, col.type, col.visibleCol);
+        } catch (err) {
+          console.error('Résolution de la référence impossible :', err);
+        }
       }
 
       el.innerHTML = renderFormulaPreviewHtml(raw, col.type, col.widgetOptions, placeholder);
