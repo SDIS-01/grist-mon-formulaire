@@ -1195,7 +1195,16 @@
     // l'intérieur de l'onglet courant (pas de nouvel onglet). Les champs placés avant
     // le premier chapitre (s'il y en a) forment un onglet "Général" implicite.
     const GATE_TAB_TITLE = 'Consulter et saisir';
-    const PRE_GATE_LABELS = ['Porteur', 'Projet_Action par Porteur', 'Commentaire_Global_Projet PEPS_Action AV']; // toujours visibles, avant les champs bloquants
+    // Liste ordonnée des champs toujours visibles en haut de cet onglet — l'ordre de
+    // cette liste EST l'ordre d'affichage (indépendant de l'ordre configuré dans ⚙️).
+    const ALWAYS_VISIBLE_LABELS = [
+      'Porteur',
+      'Projet_Action par Porteur',
+      'Projet PEPS / Action AV',
+      'Commentaire_Global_Projet PEPS_Action AV',
+      'Projet PEPS - Action AV_MEO',
+    ];
+    // Parmi cette liste, seuls ces 2-là sont obligatoires et déclenchent l'affichage du reste.
     const GATE_FIELD_LABELS = ['Projet PEPS / Action AV', 'Projet PEPS - Action AV_MEO'];
 
     const tabs = [];
@@ -1271,21 +1280,19 @@
 
       let panelHtml;
       if (tab.title && tab.title.trim() === GATE_TAB_TITLE) {
-        // Onglet "Consulter et saisir" : "Porteur" et "Projet_Action par Porteur"
-        // s'affichent en premier (toujours visibles), suivis des 2 champs déclencheurs
-        // (toujours visibles), puis le reste de l'onglet (champs ET sous-chapitres) est
-        // masqué tant que les 2 champs déclencheurs ne sont pas tous les deux remplis.
-        const preItems = PRE_GATE_LABELS
+        // Onglet "Consulter et saisir" : les champs de ALWAYS_VISIBLE_LABELS s'affichent
+        // toujours, dans cet ordre précis. Le reste de l'onglet (champs ET sous-chapitres)
+        // est masqué tant que les 2 champs de GATE_FIELD_LABELS ne sont pas tous remplis.
+        const visibleItems = ALWAYS_VISIBLE_LABELS
           .map(lbl => tab.items.find(it => it.kind === 'field' && (it.col.label || '').trim() === lbl))
           .filter(Boolean);
         const gateItems = tab.items.filter(it => it.kind === 'field' && GATE_FIELD_LABELS.includes((it.col.label || '').trim()));
-        const handledColIds = new Set([...preItems, ...gateItems].map(it => it.col.colId));
+        const handledColIds = new Set(visibleItems.map(it => it.col.colId));
         const restItems = tab.items.filter(it => !(it.kind === 'field' && handledColIds.has(it.col.colId)));
         gateFieldColIds = gateItems.map(it => it.col.colId);
-        const preHtml = await renderFieldItems(preItems);
-        const gateHtml = await renderFieldItems(gateItems);
+        const visibleHtml = await renderFieldItems(visibleItems);
         const restHtml = await renderFieldItems(restItems);
-        panelHtml = preHtml + gateHtml + `<div class="gated-fields-wrapper" id="gatedFieldsWrapper">${restHtml}</div>`;
+        panelHtml = visibleHtml + `<div class="gated-fields-wrapper" id="gatedFieldsWrapper">${restHtml}</div>`;
       } else {
         panelHtml = await renderFieldItems(tab.items);
       }
