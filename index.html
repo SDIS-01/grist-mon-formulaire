@@ -2008,11 +2008,7 @@
           if (keyValue) {
             const sep = currentOptions.attachFormUrl.includes('?') ? '&' : '?';
             const url = currentOptions.attachFormUrl + sep + encodeURIComponent(keyCol) + '=' + encodeURIComponent(keyValue);
-            attachIframeHtml = `
-              <div class="attach-embed-block">
-                <div class="attach-embed-title">📎 Ajoutez vos pièces jointes ci-dessous :</div>
-                <iframe src="${escapeHtml(url)}" class="attach-embed-iframe" title="Formulaire pièce jointe"></iframe>
-              </div>`;
+            attachIframeHtml = `<a class="btn-download" style="display:inline-block;" href="${escapeHtml(url)}" target="_blank" rel="noopener">📎 Ajouter des pièces jointes</a>`;
           } else {
             console.error('Clé de liaison introuvable après plusieurs tentatives (colonne "' + keyCol + '" bien présente et remplie ?)');
           }
