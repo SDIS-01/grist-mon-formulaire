@@ -1565,8 +1565,8 @@
     const d = new Date(num * 1000);
     const dd = String(isDateTime ? d.getDate() : d.getUTCDate()).padStart(2, '0');
     const mm = String((isDateTime ? d.getMonth() : d.getUTCMonth()) + 1).padStart(2, '0');
-    const yy = String(isDateTime ? d.getFullYear() : d.getUTCFullYear()).slice(-2);
-    let result = `${dd}/${mm}/${yy}`;
+    const yyyy = String(isDateTime ? d.getFullYear() : d.getUTCFullYear());
+    let result = `${dd}/${mm}/${yyyy}`;
     if (isDateTime) {
       const hh = String(d.getHours()).padStart(2, '0');
       const min = String(d.getMinutes()).padStart(2, '0');
