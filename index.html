@@ -43,7 +43,7 @@
   }
   .gear:hover { background: #f1f5f9; }
   .subtitle { color: var(--muted); font-size: 13px; margin-bottom: 20px; }
-  .external-links-row { display: flex; gap: 8px; flex-wrap: wrap; margin: -8px 0 16px; }
+  .external-links-row { display: flex; gap: 8px; flex-wrap: wrap; }
   .external-link-btn {
     padding: 8px 14px;
     border: 1px solid var(--border);
@@ -1226,10 +1226,20 @@
           continue;
         }
         if (item.kind === 'link') {
-          const l = item.link;
-          const c = LINK_COLORS[l.color] || LINK_COLORS.neutral;
-          html.push(`<a class="external-link-btn" href="${escapeHtml(l.url)}" target="_blank" rel="noopener"
-            style="background:${c.bg};color:${c.text};border-color:${c.border};">${escapeHtml(l.label || l.url)}</a>`);
+          // Regroupe tous les liens consécutifs (même position dans l'ordre) dans une
+          // seule rangée compacte, plutôt qu'un par ligne étiré sur toute la largeur.
+          const linkGroup = [item];
+          while (items[i + 1] && items[i + 1].kind === 'link') {
+            i++;
+            linkGroup.push(items[i]);
+          }
+          const linksHtml = linkGroup.map(it => {
+            const l = it.link;
+            const c = LINK_COLORS[l.color] || LINK_COLORS.neutral;
+            return `<a class="external-link-btn" href="${escapeHtml(l.url)}" target="_blank" rel="noopener"
+              style="background:${c.bg};color:${c.text};border-color:${c.border};">${escapeHtml(l.label || l.url)}</a>`;
+          }).join('');
+          html.push(`<div class="external-links-row">${linksHtml}</div>`);
           continue;
         }
         const next = items[i + 1];
