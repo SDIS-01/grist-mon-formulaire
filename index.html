@@ -130,6 +130,17 @@
     font-weight: 600;
   }
   .field-comment { font-size: 12px; color: var(--muted); margin: -8px 0 6px; line-height: 1.4; }
+  .btn-attach {
+    padding: 12px 20px;
+    border-radius: 8px;
+    background: #FDB913;
+    color: #1a1a1a;
+    text-decoration: none;
+    font-size: 14px;
+    font-weight: 700;
+    box-shadow: 0 2px 8px rgba(253,185,19,0.45);
+  }
+  .btn-attach:hover { background: #e6a70f; }
   .form-section {
     margin: 10px 0 -4px;
     padding-bottom: 6px;
@@ -195,7 +206,7 @@
   .field-row-2col > div { min-width: 0; }
   .form-actions-row { display: flex; justify-content: flex-end; gap: 10px; margin-top: 8px; }
   .post-submit-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 10px; }
-  .post-submit-actions .btn-download { display: inline-block; }
+  .post-submit-actions .btn-download, .post-submit-actions .btn-attach { display: inline-block; }
   .post-submit-actions button.secondary { padding: 9px 14px; }
   .new-request-btn {
     padding: 12px 20px !important;
@@ -2008,7 +2019,7 @@
           if (keyValue) {
             const sep = currentOptions.attachFormUrl.includes('?') ? '&' : '?';
             const url = currentOptions.attachFormUrl + sep + encodeURIComponent(keyCol) + '=' + encodeURIComponent(keyValue);
-            attachIframeHtml = `<a class="btn-download" style="display:inline-block;" href="${escapeHtml(url)}" target="_blank" rel="noopener">📎 Ajouter des pièces jointes</a>`;
+            attachIframeHtml = `<a class="btn-attach" href="${escapeHtml(url)}" target="_blank" rel="noopener">📎 Ajouter des pièces jointes</a>`;
           } else {
             console.error('Clé de liaison introuvable après plusieurs tentatives (colonne "' + keyCol + '" bien présente et remplie ?)');
           }
