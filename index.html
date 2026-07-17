@@ -262,7 +262,7 @@
   }
   .cfg-row {
     display: grid;
-    grid-template-columns: auto 1fr auto auto;
+    grid-template-columns: auto auto 1fr auto auto;
     gap: 10px;
     align-items: center;
     padding: 10px;
@@ -271,6 +271,16 @@
     margin-bottom: 8px;
     background: white;
   }
+  .cfg-drag-handle {
+    cursor: grab;
+    font-size: 18px;
+    color: var(--muted);
+    user-select: none;
+    padding: 0 2px;
+  }
+  .cfg-drag-handle:active { cursor: grabbing; }
+  .cfg-row.dragging { opacity: 0.4; }
+  .cfg-row .order-input { background: #f1f5f9; color: var(--muted); cursor: default; }
   #cfgList {
     max-height: 60vh;
     overflow-y: auto;
@@ -286,7 +296,7 @@
   .cfg-subsection-row { background: #eff6ff; border-color: #bfdbfe; }
   .cfg-link-row {
     display: grid;
-    grid-template-columns: 1fr 2fr auto auto;
+    grid-template-columns: auto 1fr 2fr auto auto auto;
     gap: 8px;
     align-items: center;
     padding: 8px;
@@ -296,6 +306,7 @@
     background: white;
   }
   .cfg-link-row input { font-size: 13px; padding: 7px 9px; }
+  .cfg-link-row .cfg-link-order { background: #f1f5f9; color: var(--muted); cursor: default; }
   .cfg-link-colors { margin-top: 0; }
   .cfg-section-title { font-weight: 600; }
   .cfg-color-picker { display: flex; gap: 6px; margin-top: 8px; }
@@ -363,8 +374,8 @@
     .header-logo { height: 30px; }
     .header-brand h1 { font-size: 16px; }
     .gear { width: 30px; height: 30px; font-size: 14px; }
-    .cfg-row { grid-template-columns: auto 1fr; }
-    .cfg-row .order-input { grid-column: 2; justify-self: start; width: 70px; }
+    .cfg-row { grid-template-columns: auto auto 1fr; }
+    .cfg-row .order-input { grid-column: 3; justify-self: start; width: 70px; }
     .field-row-2col { grid-template-columns: 1fr; }
   }
 
@@ -888,7 +899,8 @@
         const deleteClass = isSub ? 'cfg-subsection-delete' : 'cfg-section-delete';
         const titleClass = isSub ? 'cfg-subsection-title' : 'cfg-section-title';
         return `
-      <div class="cfg-row ${rowClass}" ${dataAttr} data-chosen-color="${currentColor}">
+      <div class="cfg-row ${rowClass}" ${dataAttr} data-chosen-color="${currentColor}" draggable="true">
+        <div class="cfg-drag-handle" title="Glisser pour réordonner">⠿</div>
         <div style="font-size:18px;">${isSub ? '📑' : '📖'}</div>
         <div>
           <input type="text" class="${titleClass}" value="${escapeHtml(s.title)}" placeholder="Titre du ${isSub ? 'sous-chapitre' : 'chapitre'}" />
@@ -896,14 +908,15 @@
           <div class="cfg-color-picker">${swatches}</div>
         </div>
         <button type="button" class="secondary ${deleteClass}" title="Supprimer" style="padding:6px 10px;">🗑️</button>
-        <input type="number" class="cfg-order order-input" value="${s.order}" />
+        <input type="number" class="cfg-order order-input" value="${s.order}" readonly title="Ordre automatique : faites glisser la ligne pour réordonner" />
       </div>`;
       }
       const c = item.data;
       const isRef = c.type.startsWith('Ref:') || c.type.startsWith('RefList:');
       const filterBlock = (isRef && !c.isFormula) ? renderFilterBlock(c) : '';
       return `
-      <div class="cfg-row" data-col="${c.colId}">
+      <div class="cfg-row" data-col="${c.colId}" draggable="true">
+        <div class="cfg-drag-handle" title="Glisser pour réordonner">⠿</div>
         <input type="checkbox" class="cfg-included" ${c.included ? 'checked' : ''} />
         <div>
           <input type="text" class="cfg-label" value="${escapeHtml(c.label)}" />
@@ -917,7 +930,7 @@
         <label style="display:flex;align-items:center;gap:4px;font-weight:400;font-size:12px;grid-column:1 / -1;">
           <input type="checkbox" class="cfg-align-next" ${c.alignWithNext ? 'checked' : ''} /> ⬌ Aligner avec le champ suivant (deux colonnes)
         </label>
-        <input type="number" class="cfg-order order-input" value="${c.order}" />
+        <input type="number" class="cfg-order order-input" value="${c.order}" readonly title="Ordre automatique : faites glisser la ligne pour réordonner" />
       </div>
     `;
     }).join('');
@@ -949,6 +962,70 @@
         });
       });
     });
+
+    setupDragReorder(list);
+  }
+
+  // Recalcule les numéros d'ordre (1, 2, 3...) à partir de l'ordre visuel actuel des
+  // lignes dans le conteneur, et répercute ces numéros sur les objets sous-jacents
+  // (champ, chapitre ou sous-chapitre) ainsi que sur l'affichage du champ "ordre".
+  function reassignOrderFromDOM(container, { colSource, sectionSource, subsectionSource, itemSelector }) {
+    const rows = container.querySelectorAll(itemSelector);
+    rows.forEach((row, idx) => {
+      const newOrder = idx + 1;
+      const orderInput = row.querySelector('.cfg-order');
+      if (orderInput) orderInput.value = newOrder;
+      if (colSource && row.dataset.col) {
+        const item = colSource.find(c => c.colId === row.dataset.col);
+        if (item) item.order = newOrder;
+      } else if (sectionSource && row.dataset.section) {
+        const item = sectionSource.find(s => s.id === row.dataset.section);
+        if (item) item.order = newOrder;
+      } else if (subsectionSource && row.dataset.subsection) {
+        const item = subsectionSource.find(s => s.id === row.dataset.subsection);
+        if (item) item.order = newOrder;
+      } else if (row.dataset.link) {
+        // Géré séparément par setupDragReorder pour la liste de liens (voir plus bas).
+      }
+    });
+  }
+
+  // Rend les lignes d'un conteneur réordonnables par glisser-déposer (souris/tactile).
+  // `onReorder` est appelé une fois le dépôt effectué, pour recalculer les numéros d'ordre.
+  function setupDragReorder(container, onReorder) {
+    let dragEl = null;
+    const rows = container.querySelectorAll('[draggable="true"]');
+    rows.forEach(row => {
+      row.addEventListener('dragstart', () => {
+        dragEl = row;
+        row.classList.add('dragging');
+      });
+      row.addEventListener('dragend', () => {
+        row.classList.remove('dragging');
+        dragEl = null;
+        if (onReorder) onReorder();
+        else reassignOrderFromDOM(container, { colSource: mergedConfig, sectionSource: formSections, subsectionSource: formSubsections, itemSelector: '.cfg-row' });
+      });
+    });
+    container.addEventListener('dragover', (e) => {
+      if (!dragEl) return;
+      e.preventDefault();
+      const afterEl = getDragAfterElement(container, e.clientY, dragEl);
+      if (afterEl == null) container.appendChild(dragEl);
+      else container.insertBefore(dragEl, afterEl);
+    });
+  }
+
+  function getDragAfterElement(container, y, dragEl) {
+    const els = [...container.querySelectorAll('[draggable="true"]')].filter(el => el !== dragEl);
+    return els.reduce((closest, child) => {
+      const box = child.getBoundingClientRect();
+      const offset = y - box.top - box.height / 2;
+      if (offset < 0 && offset > closest.offset) {
+        return { offset, element: child };
+      }
+      return closest;
+    }, { offset: Number.NEGATIVE_INFINITY, element: null }).element;
   }
 
   function addSection() {
@@ -998,11 +1075,12 @@
           data-color="${key}" title="${c.label}" style="background:${c.bg};border-color:${c.border};"></button>`;
       }).join('');
       return `
-      <div class="cfg-link-row" data-link="${l.id}" data-chosen-color="${currentColor}">
+      <div class="cfg-link-row" data-link="${l.id}" data-chosen-color="${currentColor}" draggable="true">
+        <div class="cfg-drag-handle" title="Glisser pour réordonner">⠿</div>
         <input type="text" class="cfg-link-label" value="${escapeHtml(l.label)}" placeholder="Libellé (ex. Voir le Kanban)" />
         <input type="text" class="cfg-link-url" value="${escapeHtml(l.url)}" placeholder="https://..." />
         <div class="cfg-color-picker cfg-link-colors">${swatches}</div>
-        <input type="number" class="cfg-order cfg-link-order" value="${typeof l.order === 'number' ? l.order : 0}" title="Ordre d'affichage (place ce lien dans le chapitre/onglet correspondant)" />
+        <input type="number" class="cfg-order cfg-link-order" value="${typeof l.order === 'number' ? l.order : 0}" readonly title="Ordre automatique : faites glisser la ligne pour réordonner" />
         <button type="button" class="secondary cfg-link-delete" title="Supprimer ce lien">🗑️</button>
       </div>
     `;
@@ -1023,6 +1101,15 @@
           row.querySelectorAll('.cfg-color-swatch').forEach(b => b.classList.remove('selected'));
           btn.classList.add('selected');
         });
+      });
+    });
+
+    setupDragReorder(list, () => {
+      list.querySelectorAll('.cfg-link-row').forEach((row, idx) => {
+        const newOrder = idx + 1;
+        row.querySelector('.cfg-link-order').value = newOrder;
+        const item = externalLinksList.find(l => l.id === row.dataset.link);
+        if (item) item.order = newOrder;
       });
     });
   }
