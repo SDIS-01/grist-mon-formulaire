@@ -498,7 +498,7 @@
   let refOptionsCache = {};
   let currentOptions = null;
   let comboState = {};        // colId -> option sélectionnée (Ref) ou tableau (RefList)
-  let gateFieldColIds = [];   // colId des 2 champs bloquants de l'onglet "Consulter et saisir"
+  let gateGroups = [];        // groupes de blocage indépendants : [{ wrapperId, fieldColIds }]
   let fieldTabMap = {};       // colId -> id de l'onglet qui le contient (pour la validation)
   let activateTab = null;     // fonction (assignée dans renderForm) pour changer d'onglet actif
   let comboOptionsCache = {}; // colId -> options triées disponibles pour le combobox
@@ -779,16 +779,18 @@
     updateGateVisibility();
   }
 
-  // Affiche/masque le bloc de champs bloqués de l'onglet "Consulter et saisir", selon
-  // que les 2 champs déclencheurs (gateFieldColIds) ont tous les deux une valeur.
+  // Affiche/masque le bloc de champs bloqués de chaque onglet concerné, indépendamment
+  // les uns des autres, selon que les champs déclencheurs de CE groupe ont une valeur.
   function updateGateVisibility() {
-    const wrapper = document.getElementById('gatedFieldsWrapper');
-    if (!wrapper || !gateFieldColIds.length) return;
-    const allFilled = gateFieldColIds.every(colId => {
-      const v = getFieldRawValue(colId);
-      return v !== null && v !== undefined && v !== '';
+    gateGroups.forEach(group => {
+      const wrapper = document.getElementById(group.wrapperId);
+      if (!wrapper || !group.fieldColIds.length) return;
+      const allFilled = group.fieldColIds.every(colId => {
+        const v = getFieldRawValue(colId);
+        return v !== null && v !== undefined && v !== '';
+      });
+      wrapper.style.display = allFilled ? '' : 'none';
     });
-    wrapper.style.display = allFilled ? '' : 'none';
   }
 
   // Met à jour le titre/sous-titre affichés : utilise le titre personnalisé s'il est
@@ -1282,12 +1284,15 @@
     // Chaque chapitre devient un onglet. Les sous-chapitres et les liens restent à
     // l'intérieur de l'onglet courant (pas de nouvel onglet). Les champs placés avant
     // le premier chapitre (s'il y en a) forment un onglet "Général" implicite.
-    const GATE_TAB_TITLE = 'Projet & Action';
-    // Seuls ces 2 champs sont obligatoires et déclenchent l'affichage du reste de l'onglet.
-    // Tout ce qui est positionné avant/jusqu'au dernier de ces 2 champs (via glisser-déposer
-    // dans ⚙️) reste toujours visible — champs, sous-chapitres ou liens confondus. Tout ce
-    // qui est positionné après est masqué tant que les 2 champs ne sont pas remplis.
-    const GATE_FIELD_LABELS = ['Sélectionner Projet PEPS ou Action AV', 'Sélectionner Action MEO'];
+    // Configuration du blocage conditionnel : pour chaque onglet listé ici, le(s) champ(s)
+    // indiqué(s) déclenchent l'affichage du reste de cet onglet une fois remplis. Tout ce
+    // qui est positionné avant/jusqu'à ce(s) champ(s) (via glisser-déposer dans ⚙️) reste
+    // toujours visible — champs, sous-chapitres ou liens confondus. Chaque onglet listé ici
+    // est indépendant des autres.
+    const GATE_CONFIG = {
+      'Projet & Action': ['Sélectionner Projet PEPS ou Action AV'],
+      'Action MEO & Tâche': ['Sélectionner Action MEO'],
+    };
 
     const tabs = [];
     let currentTab = null;
@@ -1346,7 +1351,7 @@
       return html.join('');
     }
 
-    gateFieldColIds = [];
+    gateGroups = [];
     fieldTabMap = {};
     const tabButtonsHtml = [];
     const tabPanelsHtml = [];
@@ -1360,19 +1365,21 @@
 
       tab.items.filter(it => it.kind === 'field').forEach(it => { fieldTabMap[it.col.colId] = tab.id; });
 
+      const gateLabels = tab.title ? GATE_CONFIG[tab.title.trim()] : null;
       let panelHtml;
-      if (tab.title && tab.title.trim() === GATE_TAB_TITLE) {
-        // Position (ordre) du dernier des 2 champs bloquants dans cet onglet : tout ce qui
-        // est positionné jusque-là (inclus) reste toujours visible, tout ce qui vient après
-        // est masqué tant que les 2 champs bloquants ne sont pas remplis.
-        const gateItems = tab.items.filter(it => it.kind === 'field' && GATE_FIELD_LABELS.includes((it.col.label || '').trim()));
-        gateFieldColIds = gateItems.map(it => it.col.colId);
+      if (gateLabels && gateLabels.length) {
+        // Position (ordre) du dernier champ bloquant de CET onglet : tout ce qui est
+        // positionné jusque-là (inclus) reste toujours visible, tout ce qui vient après
+        // est masqué tant que ce(s) champ(s) bloquant(s) ne sont pas remplis.
+        const gateItems = tab.items.filter(it => it.kind === 'field' && gateLabels.includes((it.col.label || '').trim()));
+        const wrapperId = 'gatedFieldsWrapper_' + tab.id;
+        gateGroups.push({ wrapperId, fieldColIds: gateItems.map(it => it.col.colId) });
         const cutoffOrder = gateItems.length ? Math.max(...gateItems.map(it => it.order)) : -Infinity;
         const visibleItems = tab.items.filter(it => it.order <= cutoffOrder);
         const restItems = tab.items.filter(it => it.order > cutoffOrder);
         const visibleHtml = await renderFieldItems(visibleItems);
         const restHtml = await renderFieldItems(restItems);
-        panelHtml = visibleHtml + `<div class="gated-fields-wrapper" id="gatedFieldsWrapper">${restHtml}</div>`;
+        panelHtml = visibleHtml + `<div class="gated-fields-wrapper" id="${wrapperId}">${restHtml}</div>`;
       } else {
         panelHtml = await renderFieldItems(tab.items);
       }
@@ -1440,17 +1447,20 @@
 
     // Champs bloquants non-combo (Texte/Numérique/Date) : notifyDependents() n'est
     // déclenché automatiquement que pour les champs combo, donc on branche aussi une
-    // écoute directe ici pour que le blocage se lève dès la saisie.
-    gateFieldColIds.forEach(colId => {
-      const fieldCfg = mergedConfig.find(c => c.colId === colId);
-      const isCombo = fieldCfg && (fieldCfg.type.startsWith('Ref:') || fieldCfg.type.startsWith('RefList:') ||
-        fieldCfg.type === 'Choice' || fieldCfg.type === 'ChoiceList');
-      if (!isCombo) {
-        const el = document.getElementById('f_' + colId);
-        if (el) el.addEventListener('input', updateGateVisibility);
-      }
+    // écoute directe ici pour que le blocage se lève dès la saisie. Fait pour tous les
+    // groupes de blocage (tous onglets concernés confondus).
+    gateGroups.forEach(group => {
+      group.fieldColIds.forEach(colId => {
+        const fieldCfg = mergedConfig.find(c => c.colId === colId);
+        const isCombo = fieldCfg && (fieldCfg.type.startsWith('Ref:') || fieldCfg.type.startsWith('RefList:') ||
+          fieldCfg.type === 'Choice' || fieldCfg.type === 'ChoiceList');
+        if (!isCombo) {
+          const el = document.getElementById('f_' + colId);
+          if (el) el.addEventListener('input', updateGateVisibility);
+        }
+      });
     });
-    updateGateVisibility(); // état initial : masqué tant que les 2 champs ne sont pas remplis
+    updateGateVisibility(); // état initial : masqué tant que les champs bloquants ne sont pas remplis
 
     // Notes de diagnostic (champs masqués / filtres en cascade actifs) retirées de
     // l'affichage du formulaire — utiles uniquement pendant la configuration.
