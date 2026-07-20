@@ -295,20 +295,8 @@
   .cfg-comment { margin-top: 6px; font-size: 12px; }
   .cfg-section-row { background: #f0fdf4; border-color: #bbf7d0; }
   .cfg-subsection-row { background: #eff6ff; border-color: #bfdbfe; }
-  .cfg-link-row {
-    display: grid;
-    grid-template-columns: auto 1fr 2fr auto auto auto;
-    gap: 8px;
-    align-items: center;
-    padding: 8px;
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    margin-bottom: 6px;
-    background: white;
-  }
-  .cfg-link-row input { font-size: 13px; padding: 7px 9px; }
-  .cfg-link-row .cfg-link-order { background: #f1f5f9; color: var(--muted); cursor: default; }
-  .cfg-link-colors { margin-top: 0; }
+  .cfg-link-row { background: #fffbeb; border-color: #fde68a; }
+  .cfg-link-colors { margin-top: 8px; }
   .cfg-section-title { font-weight: 600; }
   .cfg-color-picker { display: flex; gap: 6px; margin-top: 8px; }
   .cfg-color-swatch {
@@ -442,9 +430,8 @@
       <input type="text" id="cfgFormSubtitle" placeholder="Par défaut : phrase générique avec le nom de la table" />
     </div>
     <div class="cfg-block">
-      <label>🔗 Liens externes (facultatif — ex. Kanban, Gantt, autre page)</label>
-      <div id="cfgLinksList" style="margin-top:8px;"></div>
-      <button type="button" class="secondary" id="cfgAddLink" style="margin-top:8px;">+ Ajouter un lien</button>
+      <label>🔗 Liens externes</label>
+      <div class="cfg-col-name">Ajoutez un lien puis glissez-le à l'endroit voulu dans la liste ci-dessous, comme un champ ou un chapitre.</div>
     </div>
     <div class="cfg-block">
       <label for="cfgAttachFormUrl">📎 Formulaire natif Grist pour les pièces jointes (facultatif)</label>
@@ -458,6 +445,7 @@
     <div style="margin-bottom:10px;">
       <button type="button" class="secondary" id="cfgAddSection">📖 Ajouter un chapitre</button>
       <button type="button" class="secondary" id="cfgAddSubsection">📑 Ajouter un sous-chapitre</button>
+      <button type="button" class="secondary" id="cfgAddLink">🔗 Ajouter un lien</button>
     </div>
     <div id="cfgList"></div>
     <div class="cfg-actions">
@@ -863,7 +851,6 @@
     document.getElementById('cfgFormTitle').value = currentOptions.formTitle || '';
     document.getElementById('cfgFormSubtitle').value = currentOptions.formSubtitle || '';
     document.getElementById('cfgAttachFormUrl').value = currentOptions.attachFormUrl || '';
-    renderLinksList();
 
     renderConfigList();
   }
@@ -887,8 +874,30 @@
     const fieldItems = mergedConfig.map(c => ({ kind: 'field', order: c.order, data: c }));
     const sectionItems = formSections.map(s => ({ kind: 'section', order: s.order, data: s }));
     const subsectionItems = formSubsections.map(s => ({ kind: 'subsection', order: s.order, data: s }));
-    const sorted = [...fieldItems, ...sectionItems, ...subsectionItems].sort((a, b) => a.order - b.order);
+    const linkItems = externalLinksList.map(l => ({ kind: 'link', order: l.order || 0, data: l }));
+    const sorted = [...fieldItems, ...sectionItems, ...subsectionItems, ...linkItems].sort((a, b) => a.order - b.order);
     list.innerHTML = sorted.map(item => {
+      if (item.kind === 'link') {
+        const l = item.data;
+        const currentColor = l.color && LINK_COLORS[l.color] ? l.color : 'neutral';
+        const swatches = Object.keys(LINK_COLORS).map(key => {
+          const c = LINK_COLORS[key];
+          return `<button type="button" class="cfg-color-swatch${key === currentColor ? ' selected' : ''}"
+            data-color="${key}" title="${c.label}" style="background:${c.bg};border-color:${c.border};"></button>`;
+        }).join('');
+        return `
+      <div class="cfg-row cfg-link-row" data-link="${l.id}" data-chosen-color="${currentColor}" draggable="true">
+        <div class="cfg-drag-handle" title="Glisser pour réordonner">⠿</div>
+        <div style="font-size:18px;">🔗</div>
+        <div>
+          <input type="text" class="cfg-link-label" value="${escapeHtml(l.label)}" placeholder="Libellé (ex. Voir le Kanban)" />
+          <input type="text" class="cfg-link-url" value="${escapeHtml(l.url)}" placeholder="https://..." style="margin-top:6px;" />
+          <div class="cfg-color-picker cfg-link-colors">${swatches}</div>
+        </div>
+        <button type="button" class="secondary cfg-link-delete" title="Supprimer ce lien">🗑️</button>
+        <input type="number" class="cfg-order order-input" value="${l.order || 0}" readonly title="Ordre automatique : faites glisser la ligne pour réordonner" />
+      </div>`;
+      }
       if (item.kind === 'section' || item.kind === 'subsection') {
         const s = item.data;
         const isSub = item.kind === 'subsection';
@@ -956,7 +965,15 @@
       });
     });
 
-    list.querySelectorAll('.cfg-section-row, .cfg-subsection-row').forEach(row => {
+    list.querySelectorAll('.cfg-link-delete').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const row = btn.closest('.cfg-link-row');
+        externalLinksList = externalLinksList.filter(l => l.id !== row.dataset.link);
+        renderConfigList();
+      });
+    });
+
+    list.querySelectorAll('.cfg-section-row, .cfg-subsection-row, .cfg-link-row').forEach(row => {
       row.querySelectorAll('.cfg-color-swatch').forEach(btn => {
         btn.addEventListener('click', () => {
           row.dataset.chosenColor = btn.dataset.color;
@@ -966,7 +983,26 @@
       });
     });
 
-    setupDragReorder(list);
+    setupDragReorder(list, () => {
+      list.querySelectorAll('.cfg-row').forEach((row, idx) => {
+        const newOrder = idx + 1;
+        const orderInput = row.querySelector('.cfg-order');
+        if (orderInput) orderInput.value = newOrder;
+        if (row.dataset.col) {
+          const item = mergedConfig.find(c => c.colId === row.dataset.col);
+          if (item) item.order = newOrder;
+        } else if (row.dataset.section) {
+          const item = formSections.find(s => s.id === row.dataset.section);
+          if (item) item.order = newOrder;
+        } else if (row.dataset.subsection) {
+          const item = formSubsections.find(s => s.id === row.dataset.subsection);
+          if (item) item.order = newOrder;
+        } else if (row.dataset.link) {
+          const item = externalLinksList.find(l => l.id === row.dataset.link);
+          if (item) item.order = newOrder;
+        }
+      });
+    });
   }
 
   // Recalcule les numéros d'ordre (1, 2, 3...) à partir de l'ordre visuel actuel des
@@ -1067,56 +1103,6 @@
     green:   { label: 'Vert',    bg: '#e6f4ea', text: '#145c2c', border: '#a9dbb8' },
   };
 
-  function renderLinksList() {
-    const list = document.getElementById('cfgLinksList');
-    if (!list) return;
-    list.innerHTML = externalLinksList.map(l => {
-      const currentColor = l.color && LINK_COLORS[l.color] ? l.color : 'neutral';
-      const swatches = Object.keys(LINK_COLORS).map(key => {
-        const c = LINK_COLORS[key];
-        return `<button type="button" class="cfg-color-swatch${key === currentColor ? ' selected' : ''}"
-          data-color="${key}" title="${c.label}" style="background:${c.bg};border-color:${c.border};"></button>`;
-      }).join('');
-      return `
-      <div class="cfg-link-row" data-link="${l.id}" data-chosen-color="${currentColor}" draggable="true">
-        <div class="cfg-drag-handle" title="Glisser pour réordonner">⠿</div>
-        <input type="text" class="cfg-link-label" value="${escapeHtml(l.label)}" placeholder="Libellé (ex. Voir le Kanban)" />
-        <input type="text" class="cfg-link-url" value="${escapeHtml(l.url)}" placeholder="https://..." />
-        <div class="cfg-color-picker cfg-link-colors">${swatches}</div>
-        <input type="number" class="cfg-order cfg-link-order" value="${typeof l.order === 'number' ? l.order : 0}" readonly title="Ordre automatique : faites glisser la ligne pour réordonner" />
-        <button type="button" class="secondary cfg-link-delete" title="Supprimer ce lien">🗑️</button>
-      </div>
-    `;
-    }).join('') || '<div class="cfg-col-name">Aucun lien pour le moment.</div>';
-
-    list.querySelectorAll('.cfg-link-delete').forEach(btn => {
-      btn.addEventListener('click', () => {
-        const row = btn.closest('.cfg-link-row');
-        externalLinksList = externalLinksList.filter(l => l.id !== row.dataset.link);
-        renderLinksList();
-      });
-    });
-
-    list.querySelectorAll('.cfg-link-row').forEach(row => {
-      row.querySelectorAll('.cfg-color-swatch').forEach(btn => {
-        btn.addEventListener('click', () => {
-          row.dataset.chosenColor = btn.dataset.color;
-          row.querySelectorAll('.cfg-color-swatch').forEach(b => b.classList.remove('selected'));
-          btn.classList.add('selected');
-        });
-      });
-    });
-
-    setupDragReorder(list, () => {
-      list.querySelectorAll('.cfg-link-row').forEach((row, idx) => {
-        const newOrder = idx + 1;
-        row.querySelector('.cfg-link-order').value = newOrder;
-        const item = externalLinksList.find(l => l.id === row.dataset.link);
-        if (item) item.order = newOrder;
-      });
-    });
-  }
-
   function addExternalLink() {
     const allOrders = [...mergedConfig.map(c => c.order), ...formSections.map(s => s.order), ...formSubsections.map(s => s.order), ...externalLinksList.map(l => l.order || 0)];
     const maxOrder = allOrders.length ? Math.max(...allOrders) : 0;
@@ -1127,7 +1113,7 @@
       color: 'neutral',
       order: maxOrder + 1,
     });
-    renderLinksList();
+    renderConfigList();
   }
 
   // Bloc "filtre en cascade" affiché sous un champ Référence/RéférenceListe dans le panneau ⚙️ :
@@ -1173,15 +1159,16 @@
     await grist.setOption('attachFormUrl', attachFormUrl || null);
     currentOptions.attachFormUrl = attachFormUrl || null;
 
-    // Liste de liens externes : lue depuis les lignes du panneau, puis sauvegardée.
-    // On efface aussi les anciens champs fixes (kanbanUrl/ganttUrl) une fois migrés.
-    const linkRows = document.querySelectorAll('#cfgLinksList .cfg-link-row');
+    // Liste de liens externes : lue depuis les lignes du panneau (liste unifiée avec les
+    // champs/chapitres), puis sauvegardée. On efface aussi les anciens champs fixes
+    // (kanbanUrl/ganttUrl) une fois migrés.
+    const linkRows = document.querySelectorAll('#cfgList .cfg-link-row');
     const newLinks = Array.from(linkRows).map(row => ({
       id: row.dataset.link,
       label: row.querySelector('.cfg-link-label').value.trim() || 'Lien',
       url: row.querySelector('.cfg-link-url').value.trim(),
       color: row.dataset.chosenColor || 'neutral',
-      order: parseInt(row.querySelector('.cfg-link-order').value, 10) || 0,
+      order: parseInt(row.querySelector('.cfg-order').value, 10) || 0,
     })).filter(l => l.url); // on ignore les lignes sans URL renseignée
     await grist.setOption('externalLinksList', newLinks);
     await grist.setOption('kanbanUrl', null);
@@ -1395,9 +1382,9 @@
 
     formEl.innerHTML = fieldsHtml.join('') +
       attachHint +
-      '<div class="form-actions-row">' +
+      '<div class="form-actions-row" id="formActionsRow">' +
       '<button type="button" class="secondary" id="resetFormBtn">↺ Réinitialiser</button>' +
-      '<button type="submit" class="primary">Envoyer</button>' +
+      '<button type="submit" class="primary" id="submitFormBtn">Envoyer</button>' +
       '</div>';
     formEl.onsubmit = handleSubmit;
     document.getElementById('resetFormBtn').addEventListener('click', () => {
@@ -1406,6 +1393,10 @@
       const attachArea = document.getElementById('attachActionArea');
       if (attachArea) attachArea.innerHTML = '';
     });
+
+    // Onglets sur lesquels le bouton Envoyer (et Réinitialiser) ne doit pas apparaître —
+    // ce sont des onglets de consultation seule, pas de saisie à valider.
+    const NO_SUBMIT_TABS = ['Projet & Action', 'Rapport'];
 
     // Navigation entre onglets (masquage CSS uniquement : les champs des autres onglets
     // restent dans le DOM et fonctionnent normalement en arrière-plan). Fonction
@@ -1418,11 +1409,21 @@
       const panel = formEl.querySelector(`.form-tab-panel[data-tab-id="${tabId}"]`);
       if (btn) btn.classList.add('active');
       if (panel) panel.classList.add('active');
+
+      const activeTab = tabs.find(t => t.id === tabId);
+      const submitBtn = document.getElementById('submitFormBtn');
+      if (submitBtn) {
+        const hide = activeTab && activeTab.title && NO_SUBMIT_TABS.includes(activeTab.title.trim());
+        submitBtn.style.display = hide ? 'none' : '';
+      }
     };
 
     formEl.querySelectorAll('.form-tab-btn').forEach(btn => {
       btn.addEventListener('click', () => activateTab(btn.dataset.tabId));
     });
+
+    // Applique l'état initial (l'onglet actif par défaut est le premier).
+    if (tabs.length) activateTab(tabs[0].id);
 
     included
       .filter(col => !col.isFormula && (col.type.startsWith('Ref:') || col.type.startsWith('RefList:') || col.type === 'Choice' || col.type === 'ChoiceList'))
