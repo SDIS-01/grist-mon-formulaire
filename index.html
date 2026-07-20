@@ -91,6 +91,7 @@
     font-family: inherit;
     background: #f1f5f9;
     color: var(--text);
+    white-space: pre-wrap;
   }
   .formula-preview-placeholder { color: var(--muted); }
   .formula-preview-list {
@@ -1282,25 +1283,11 @@
     // l'intérieur de l'onglet courant (pas de nouvel onglet). Les champs placés avant
     // le premier chapitre (s'il y en a) forment un onglet "Général" implicite.
     const GATE_TAB_TITLE = 'Projet & Action';
-    // Liste ordonnée des champs toujours visibles en haut de cet onglet — l'ordre de
-    // cette liste EST l'ordre d'affichage (indépendant de l'ordre configuré dans ⚙️).
-    const ALWAYS_VISIBLE_LABELS = [
-      'Porteur',
-      'Liste Projet PEPS_ Action AV',
-      'Liste Action AV_MEO',
-      'Sélectionner Projet PEPS ou Action AV',
-      'Porteur projet PEPS_Action AV',
-      'Avancement',
-      'Commentaire',
-      'Passage en instance',
-      'Dernière mise à jour',
-      'Liste des actions MEO',
-      'Equipe',
-      'Porteur Action AV_MEO',
-      'Sélectionner Action AV_MEO',
-    ];
-    // Parmi cette liste, seuls ces 2-là sont obligatoires et déclenchent l'affichage du reste.
-    const GATE_FIELD_LABELS = ['Sélectionner Projet PEPS ou Action AV', 'Sélectionner Action AV_MEO'];
+    // Seuls ces 2 champs sont obligatoires et déclenchent l'affichage du reste de l'onglet.
+    // Tout ce qui est positionné avant/jusqu'au dernier de ces 2 champs (via glisser-déposer
+    // dans ⚙️) reste toujours visible — champs, sous-chapitres ou liens confondus. Tout ce
+    // qui est positionné après est masqué tant que les 2 champs ne sont pas remplis.
+    const GATE_FIELD_LABELS = ['Sélectionner Projet PEPS ou Action AV', 'Sélectionner Action MEO'];
 
     const tabs = [];
     let currentTab = null;
@@ -1375,16 +1362,14 @@
 
       let panelHtml;
       if (tab.title && tab.title.trim() === GATE_TAB_TITLE) {
-        // Onglet "Consulter et saisir" : les champs de ALWAYS_VISIBLE_LABELS s'affichent
-        // toujours, dans cet ordre précis. Le reste de l'onglet (champs ET sous-chapitres)
-        // est masqué tant que les 2 champs de GATE_FIELD_LABELS ne sont pas tous remplis.
-        const visibleItems = ALWAYS_VISIBLE_LABELS
-          .map(lbl => tab.items.find(it => it.kind === 'field' && (it.col.label || '').trim() === lbl))
-          .filter(Boolean);
+        // Position (ordre) du dernier des 2 champs bloquants dans cet onglet : tout ce qui
+        // est positionné jusque-là (inclus) reste toujours visible, tout ce qui vient après
+        // est masqué tant que les 2 champs bloquants ne sont pas remplis.
         const gateItems = tab.items.filter(it => it.kind === 'field' && GATE_FIELD_LABELS.includes((it.col.label || '').trim()));
-        const handledColIds = new Set(visibleItems.map(it => it.col.colId));
-        const restItems = tab.items.filter(it => !(it.kind === 'field' && handledColIds.has(it.col.colId)));
         gateFieldColIds = gateItems.map(it => it.col.colId);
+        const cutoffOrder = gateItems.length ? Math.max(...gateItems.map(it => it.order)) : -Infinity;
+        const visibleItems = tab.items.filter(it => it.order <= cutoffOrder);
+        const restItems = tab.items.filter(it => it.order > cutoffOrder);
         const visibleHtml = await renderFieldItems(visibleItems);
         const restHtml = await renderFieldItems(restItems);
         panelHtml = visibleHtml + `<div class="gated-fields-wrapper" id="gatedFieldsWrapper">${restHtml}</div>`;
@@ -1550,9 +1535,12 @@
         const opts = JSON.parse(col.widgetOptions || '{}');
         choices = opts.choices || [];
       } catch (e) {}
-      const options = choices
+      let options = choices
         .filter(c => c !== null && c !== undefined && String(c).trim() !== '')
         .map(c => ({ value: c, label: c }));
+      if (fieldRequiresMeoFilter(col)) {
+        options = options.filter(o => o.label.toLowerCase().includes('meo'));
+      }
       comboOptionsCache[col.colId] = options;
       const isList = type === 'ChoiceList';
       return `
@@ -1621,8 +1609,18 @@
       }
       options.push(opt);
     }
-    options.sort((a, b) => a.label.localeCompare(b.label, 'fr', { sensitivity: 'base' }));
-    return options;
+    let filteredOptions = options;
+    if (fieldRequiresMeoFilter(col)) {
+      filteredOptions = filteredOptions.filter(o => o.label.toLowerCase().includes('meo'));
+    }
+    filteredOptions.sort((a, b) => a.label.localeCompare(b.label, 'fr', { sensitivity: 'base' }));
+    return filteredOptions;
+  }
+
+  // Un champ dont le libellé actuel contient "MEO" (insensible à la casse) ne doit
+  // proposer/afficher que les valeurs dont le texte affiché contient lui aussi "MEO".
+  function fieldRequiresMeoFilter(col) {
+    return !!(col && col.label && col.label.toLowerCase().includes('meo'));
   }
 
   // Applique le format d'affichage Grist (pourcentage, nombre de décimales) à une valeur
@@ -1677,7 +1675,7 @@
   //   (ex. "Projet 1, Projet 2, Projet 3").
   // Dans les deux cas, si plusieurs éléments sont trouvés, chacun s'affiche sur sa
   // propre ligne au lieu d'un texte continu, pour rester lisible.
-  function renderFormulaPreviewHtml(raw, type, widgetOptionsStr, placeholder) {
+  function renderFormulaPreviewHtml(raw, type, widgetOptionsStr, placeholder, meoFilter) {
     if (raw === null || raw === undefined || raw === '') {
       return `<span class="formula-preview-placeholder">${escapeHtml(placeholder)}</span>`;
     }
@@ -1696,6 +1694,10 @@
     } else {
       items = String(raw).split(',').map(s => s.trim()).filter(s => s !== '');
     }
+    if (meoFilter) {
+      items = items.filter(it => it.toLowerCase().includes('meo'));
+    }
+    items.sort((a, b) => a.localeCompare(b, 'fr', { sensitivity: 'base' }));
 
     if (items.length > 1) {
       return '<ul class="formula-preview-list">' + items.map(it => `<li>${escapeHtml(it)}</li>`).join('') + '</ul>';
@@ -1819,7 +1821,7 @@
         }
       }
 
-      el.innerHTML = renderFormulaPreviewHtml(raw, col.type, col.widgetOptions, placeholder);
+      el.innerHTML = renderFormulaPreviewHtml(raw, col.type, col.widgetOptions, placeholder, fieldRequiresMeoFilter(col));
     };
 
     formulaCallbacks[col.colId](); // état initial (généralement vide tant que rien n'est sélectionné)
