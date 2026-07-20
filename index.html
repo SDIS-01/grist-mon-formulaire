@@ -488,6 +488,7 @@
   let comboState = {};        // colId -> option sélectionnée (Ref) ou tableau (RefList)
   let gateGroups = [];        // groupes de blocage indépendants : [{ wrapperId, fieldColIds }]
   let fieldTabMap = {};       // colId -> id de l'onglet qui le contient (pour la validation)
+  let fieldTabTitleMap = {};  // colId -> titre de l'onglet qui le contient (pour le filtre MEO)
   let activateTab = null;     // fonction (assignée dans renderForm) pour changer d'onglet actif
   let comboOptionsCache = {}; // colId -> options triées disponibles pour le combobox
   let docTablesMeta = null;   // cache de _grist_Tables (toutes les tables du document)
@@ -1340,6 +1341,7 @@
 
     gateGroups = [];
     fieldTabMap = {};
+    fieldTabTitleMap = {};
     const tabButtonsHtml = [];
     const tabPanelsHtml = [];
 
@@ -1350,7 +1352,10 @@
       const color = tab.color || 'var(--accent)';
       tabButtonsHtml.push(`<button type="button" class="form-tab-btn${isActive ? ' active' : ''}" data-tab-id="${tab.id}" style="--tab-color:${color};">${escapeHtml(label)}</button>`);
 
-      tab.items.filter(it => it.kind === 'field').forEach(it => { fieldTabMap[it.col.colId] = tab.id; });
+      tab.items.filter(it => it.kind === 'field').forEach(it => {
+        fieldTabMap[it.col.colId] = tab.id;
+        fieldTabTitleMap[it.col.colId] = tab.title || '';
+      });
 
       const gateLabels = tab.title ? GATE_CONFIG[tab.title.trim()] : null;
       let panelHtml;
@@ -1629,9 +1634,13 @@
   }
 
   // Un champ dont le libellé actuel contient "MEO" (insensible à la casse) ne doit
-  // proposer/afficher que les valeurs dont le texte affiché contient lui aussi "MEO".
+  // proposer/afficher que les valeurs dont le texte affiché contient lui aussi "MEO" —
+  // mais uniquement pour les champs de l'onglet "Projet & Action" (pas les autres onglets).
+  const MEO_FILTER_TAB_TITLE = 'Projet & Action';
   function fieldRequiresMeoFilter(col) {
-    return !!(col && col.label && col.label.toLowerCase().includes('meo'));
+    if (!col || !col.label || !col.label.toLowerCase().includes('meo')) return false;
+    const tabTitle = fieldTabTitleMap[col.colId];
+    return tabTitle === MEO_FILTER_TAB_TITLE;
   }
 
   // Applique le format d'affichage Grist (pourcentage, nombre de décimales) à une valeur
