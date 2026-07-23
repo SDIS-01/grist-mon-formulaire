@@ -102,6 +102,25 @@
     gap: 4px;
   }
   .formula-preview-list li { line-height: 1.4; }
+  .combined-table-wrap { display: flex; flex-direction: column; gap: 14px; }
+  .combined-table-group h4 {
+    margin: 0 0 6px;
+    font-size: 12px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.02em;
+    color: var(--accent-dark);
+  }
+  .combined-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .combined-table th {
+    text-align: left;
+    padding: 6px 8px;
+    background: #f1f5f9;
+    border: 1px solid var(--border);
+    font-weight: 700;
+  }
+  .combined-table td { padding: 6px 8px; border: 1px solid var(--border); vertical-align: top; }
+  .combined-table td.ct-col-avancement { white-space: nowrap; }
   .attachment-list { display: flex; flex-direction: column; gap: 8px; }
   .attachment-item {
     display: flex; align-items: center; gap: 8px;
@@ -189,7 +208,6 @@
     display: flex;
     flex-direction: column;
     gap: 14px;
-    overflow: hidden;
   }
   .form-subsection-body.collapsed { display: none; }
 
@@ -467,6 +485,24 @@
         Nécessite une colonne <strong>CleLien</strong> (texte simple) sur la table de ce formulaire.
         La clé est générée par le widget à l'envoi et transmise dans l'URL.
       </div>
+    </div>
+    <div class="cfg-block">
+      <label>📊 Tableau combiné (regroupe 4 colonnes formule liste en un tableau, réparti par nature)</label>
+      <div class="cfg-col-name" style="margin-bottom:8px;">Choisissez les 4 colonnes formule sources (elles doivent provenir du même lookupRecords), et les libellés des deux groupes. Laissez "— Aucune —" sur la colonne Nom pour désactiver.</div>
+      <label for="cfgCombNameCol" style="margin-top:6px;">Colonne "Nom"</label>
+      <select id="cfgCombNameCol"></select>
+      <label for="cfgCombNatureCol" style="margin-top:6px;">Colonne "Nature" (sert à répartir en 2 groupes)</label>
+      <select id="cfgCombNatureCol"></select>
+      <label for="cfgCombAvancementCol" style="margin-top:6px;">Colonne "Avancement"</label>
+      <select id="cfgCombAvancementCol"></select>
+      <label for="cfgCombCommentCol" style="margin-top:6px;">Colonne "Commentaire"</label>
+      <select id="cfgCombCommentCol"></select>
+      <label for="cfgCombGroup2Values" style="margin-top:6px;">Valeur(s) de Nature pour le 2ᵉ groupe (séparées par virgule, ex. MEO)</label>
+      <input type="text" id="cfgCombGroup2Values" placeholder="MEO" />
+      <label for="cfgCombGroup1Label" style="margin-top:6px;">Titre du 1er groupe (tout le reste)</label>
+      <input type="text" id="cfgCombGroup1Label" placeholder="Projets / actions AV" />
+      <label for="cfgCombGroup2Label" style="margin-top:6px;">Titre du 2ᵉ groupe</label>
+      <input type="text" id="cfgCombGroup2Label" placeholder="Actions MEO" />
     </div>
     <div class="subtitle">Cochez les champs à afficher, renommez-les si besoin, marquez-les obligatoires et fixez leur ordre. Les colonnes formule sont affichées en lecture seule (grisées) dans le formulaire.</div>
     <div style="margin-bottom:10px;">
@@ -881,7 +917,28 @@
     document.getElementById('cfgFormSubtitle').value = currentOptions.formSubtitle || '';
     document.getElementById('cfgAttachFormUrl').value = currentOptions.attachFormUrl || '';
 
+    populateCombinedTableConfig();
     renderConfigList();
+  }
+
+  // Remplit les 4 listes déroulantes du bloc "Tableau combiné" avec les colonnes formule
+  // disponibles, et restaure les valeurs déjà enregistrées le cas échéant.
+  function populateCombinedTableConfig() {
+    const ct = currentOptions.combinedTable || {};
+    const formulaCols = mergedConfig.filter(c => c.isFormula);
+    const options = ['<option value="">— Aucune —</option>']
+      .concat(formulaCols.map(c => `<option value="${c.colId}">${escapeHtml(c.label)} (${c.colId})</option>`))
+      .join('');
+    ['cfgCombNameCol', 'cfgCombNatureCol', 'cfgCombAvancementCol', 'cfgCombCommentCol'].forEach(id => {
+      document.getElementById(id).innerHTML = options;
+    });
+    document.getElementById('cfgCombNameCol').value = ct.nameCol || '';
+    document.getElementById('cfgCombNatureCol').value = ct.natureCol || '';
+    document.getElementById('cfgCombAvancementCol').value = ct.avancementCol || '';
+    document.getElementById('cfgCombCommentCol').value = ct.commentCol || '';
+    document.getElementById('cfgCombGroup2Values').value = (ct.group2Values || []).join(', ');
+    document.getElementById('cfgCombGroup1Label').value = ct.group1Label || '';
+    document.getElementById('cfgCombGroup2Label').value = ct.group2Label || '';
   }
 
   function hideConfig() {
@@ -1187,6 +1244,19 @@
     const attachFormUrl = document.getElementById('cfgAttachFormUrl').value.trim();
     await grist.setOption('attachFormUrl', attachFormUrl || null);
     currentOptions.attachFormUrl = attachFormUrl || null;
+
+    const combNameCol = document.getElementById('cfgCombNameCol').value;
+    const combinedTable = combNameCol ? {
+      nameCol: combNameCol,
+      natureCol: document.getElementById('cfgCombNatureCol').value || null,
+      avancementCol: document.getElementById('cfgCombAvancementCol').value || null,
+      commentCol: document.getElementById('cfgCombCommentCol').value || null,
+      group2Values: document.getElementById('cfgCombGroup2Values').value.split(',').map(s => s.trim()).filter(Boolean),
+      group1Label: document.getElementById('cfgCombGroup1Label').value.trim() || 'Groupe 1',
+      group2Label: document.getElementById('cfgCombGroup2Label').value.trim() || 'Groupe 2',
+    } : null;
+    await grist.setOption('combinedTable', combinedTable);
+    currentOptions.combinedTable = combinedTable;
 
     // Liste de liens externes : lue depuis les lignes du panneau (liste unifiée avec les
     // champs/chapitres), puis sauvegardée. On efface aussi les anciens champs fixes
@@ -1513,7 +1583,16 @@
 
     // Champs formule pour lesquels un aperçu en direct est possible (recopie simple
     // depuis une référence) : on branche leur mise à jour dès que la référence change.
-    included.filter(col => col.isFormula).forEach(setupFormulaPreview);
+    // Le champ "Nom" du tableau combiné (s'il est configuré) est traité à part par
+    // setupCombinedTablePreview ci-dessous, pas par le mécanisme d'aperçu standard.
+    const combinedTableCfg = currentOptions.combinedTable;
+    included
+      .filter(col => col.isFormula && !(combinedTableCfg && col.colId === combinedTableCfg.nameCol))
+      .forEach(setupFormulaPreview);
+    if (combinedTableCfg) {
+      const nameField = included.find(c => c.colId === combinedTableCfg.nameCol);
+      if (nameField) setupCombinedTablePreview(nameField, combinedTableCfg);
+    }
 
     // Les champs "parents" qui ne sont pas des combos (Texte, Numérique, Date, etc.)
     // doivent aussi déclencher le rafraîchissement de leurs champs enfants.
@@ -1567,6 +1646,26 @@
     // tous les onglets, juste avant l'envoi (voir validateRequiredFields()).
     const reqAttr = '';
     const reqMark = col.required ? ' <span class="req">*</span>' : '';
+
+    // Tableau combiné : ce champ ne fait que fournir les données (Nature/Avancement/
+    // Commentaire) au tableau rendu à la place du champ "Nom" — il ne s'affiche pas lui-même.
+    const ct = currentOptions.combinedTable;
+    if (ct && (col.colId === ct.natureCol || col.colId === ct.avancementCol || col.colId === ct.commentCol)) {
+      return '';
+    }
+
+    // Tableau combiné : c'est ici, à la place du champ "Nom", que le tableau regroupant
+    // Nom/Avancement/Commentaire (réparti en 2 groupes selon Nature) est affiché.
+    if (ct && col.colId === ct.nameCol) {
+      return `
+        <div>
+          <label for="${id}">${col.label}</label>
+          ${commentHtml(col)}
+          <div class="combined-table-wrap" id="${id}" data-combined-table="1">
+            <span class="formula-preview-placeholder">Se remplit après sélection du champ lié</span>
+          </div>
+        </div>`;
+    }
 
     // Colonne formule : affichage informatif, non modifiable, non envoyée.
     // Si un aperçu simple est possible (recopie directe depuis une référence), le champ
@@ -1922,6 +2021,88 @@
     };
 
     formulaCallbacks[col.colId](); // état initial (généralement vide tant que rien n'est sélectionné)
+  }
+
+  // Normalise une valeur brute de liste Grist (marqueur ["L", v1, v2, ...] ou tableau simple)
+  // en un tableau JS classique de valeurs, chaîne, trim, en filtrant les entrées vides.
+  function normalizeListRaw(raw) {
+    if (raw === null || raw === undefined || raw === '') return [];
+    const values = Array.isArray(raw) ? (raw[0] === 'L' ? raw.slice(1) : raw) : [raw];
+    return values.map(v => (v === null || v === undefined) ? '' : String(v).trim());
+  }
+
+  // Branche et affiche le "tableau combiné" : recombine 4 colonnes formule liste
+  // (Nom, Nature, Avancement, Commentaire), toutes issues du même lookupRecords, en un
+  // tableau ligne à ligne, réparti en 2 groupes selon la valeur de Nature.
+  function setupCombinedTablePreview(nameCol, cfg) {
+    const nameInfo = formulaPreviewInfo[nameCol.colId];
+    const el = document.getElementById('f_' + nameCol.colId);
+    if (!nameInfo || !el) return;
+
+    const natureField = mergedConfig.find(c => c.colId === cfg.natureCol);
+    const avancementField = mergedConfig.find(c => c.colId === cfg.avancementCol);
+    const commentField = mergedConfig.find(c => c.colId === cfg.commentCol);
+    const natureInfo = natureField ? formulaPreviewInfo[natureField.colId] : null;
+    const avancementInfo = avancementField ? formulaPreviewInfo[avancementField.colId] : null;
+    const commentInfo = commentField ? formulaPreviewInfo[commentField.colId] : null;
+
+    function renderGroup(title, rows) {
+      if (!rows.length) return '';
+      const rowsHtml = rows.map(r => `
+        <tr>
+          <td>${escapeHtml(r.nom)}</td>
+          <td class="ct-col-avancement">${escapeHtml(r.avancement)}</td>
+          <td>${escapeHtml(r.commentaire)}</td>
+        </tr>`).join('');
+      return `
+        <div class="combined-table-group">
+          <h4>${escapeHtml(title)}</h4>
+          <table class="combined-table">
+            <thead><tr><th>Nom</th><th>Avancement</th><th>Commentaire</th></tr></thead>
+            <tbody>${rowsHtml}</tbody>
+          </table>
+        </div>`;
+    }
+
+    const rebuild = () => {
+      const refValue = getFieldRawValue(nameInfo.refColId);
+      const data = refOptionsCache[nameInfo.targetTable];
+      if (refValue === null || refValue === undefined || refValue === '' || !data) {
+        el.innerHTML = '<span class="formula-preview-placeholder">Se remplit après sélection du champ lié</span>';
+        return;
+      }
+      const targetId = typeof refValue === 'string' ? parseInt(refValue, 10) : refValue;
+      const idx = data.id.indexOf(targetId);
+      if (idx === -1) {
+        el.innerHTML = '<span class="formula-preview-placeholder">Se remplit après sélection du champ lié</span>';
+        return;
+      }
+
+      const noms = normalizeListRaw(data[nameInfo.subColId] ? data[nameInfo.subColId][idx] : null);
+      const natures = natureInfo ? normalizeListRaw(data[natureInfo.subColId] ? data[natureInfo.subColId][idx] : null) : [];
+      const avancements = avancementInfo ? normalizeListRaw(data[avancementInfo.subColId] ? data[avancementInfo.subColId][idx] : null) : [];
+      const commentaires = commentInfo ? normalizeListRaw(data[commentInfo.subColId] ? data[commentInfo.subColId][idx] : null) : [];
+
+      if (!noms.length) {
+        el.innerHTML = '<span class="formula-preview-placeholder">Aucun élément</span>';
+        return;
+      }
+
+      const group2Values = (cfg.group2Values || []).map(v => v.toLowerCase());
+      const group1Rows = [];
+      const group2Rows = [];
+      noms.forEach((nom, i) => {
+        const row = { nom, avancement: avancements[i] || '', commentaire: commentaires[i] || '' };
+        const nature = (natures[i] || '').toLowerCase();
+        if (group2Values.includes(nature)) group2Rows.push(row);
+        else group1Rows.push(row);
+      });
+
+      el.innerHTML = renderGroup(cfg.group1Label, group1Rows) + renderGroup(cfg.group2Label, group2Rows);
+    };
+
+    formulaCallbacks[nameCol.colId] = rebuild;
+    rebuild();
   }
 
   function setupCombobox(col, isList) {
