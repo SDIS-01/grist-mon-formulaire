@@ -168,6 +168,31 @@
   }
   .form-subsection:first-child { margin-top: 0; }
 
+  /* ---------- Sous-chapitres repliables ---------- */
+  .form-subsection-toggle {
+    cursor: pointer;
+    user-select: none;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .form-subsection-toggle:hover h3 { opacity: 0.75; }
+  .form-subsection-toggle h3 { display: flex; align-items: center; gap: 6px; }
+  .subsection-caret {
+    display: inline-block;
+    transition: transform 0.15s ease;
+    font-size: 11px;
+    transform: rotate(0deg);
+  }
+  .form-subsection-toggle.collapsed .subsection-caret { transform: rotate(-90deg); }
+  .form-subsection-body {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    overflow: hidden;
+  }
+  .form-subsection-body.collapsed { display: none; }
+
   /* ---------- Onglets (un par chapitre) ---------- */
   .form-tabs-nav {
     display: flex;
@@ -378,6 +403,8 @@
     .subtitle { margin-bottom: 16px; }
     input:disabled, .formula-preview { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
     form { gap: 10px; }
+    .form-subsection-body.collapsed { display: flex !important; }
+    .subsection-caret { display: none; }
   }
 </style>
 </head>
@@ -467,6 +494,7 @@
   let formSections = []; // chapitres (= onglets) : [{ id, title, order, color }]
   let formSubsections = []; // sous-chapitres (titres à l'intérieur d'un onglet) : [{ id, title, order, color }]
   let externalLinksList = []; // liens externes personnalisés : [{ id, label, url }]
+  let collapsedSubsections = {}; // id de sous-chapitre -> true si replié (état en mémoire, non persisté)
 
   // Charge la liste de liens externes, avec migration automatique depuis les deux
   // anciens champs fixes (kanbanUrl / ganttUrl) si la liste n'existe pas encore.
@@ -1297,18 +1325,14 @@
       }
     }
 
-    // Rendu d'une liste d'items (champs, titres de sous-chapitre, ou liens externes),
-    // avec gestion du couplage 2-colonnes existant pour les champs.
-    async function renderFieldItems(items) {
+    // Rendu d'une liste d'items (champs, liens externes) SANS gestion de sous-chapitre —
+    // le regroupement/repli des sous-chapitres est fait un niveau au-dessus, par
+    // renderFieldItems(), qui découpe la liste en segments avant d'appeler cette fonction
+    // pour le contenu de chaque segment. Gère le couplage 2-colonnes des champs.
+    async function renderItemsList(items) {
       const html = [];
       for (let i = 0; i < items.length; i++) {
         const item = items[i];
-        if (item.kind === 'subsection') {
-          const s = item.subsection;
-          const color = s.color || '#1B7A3D';
-          html.push(`<div class="form-subsection" style="border-bottom-color:${color};"><h3 style="color:${color};">${escapeHtml(s.title)}</h3></div>`);
-          continue;
-        }
         if (item.kind === 'link') {
           // Regroupe tous les liens consécutifs (même position dans l'ordre) dans une
           // seule rangée compacte, plutôt qu'un par ligne étiré sur toute la largeur.
@@ -1337,6 +1361,44 @@
         html.push(await renderField(item.col));
       }
       return html.join('');
+    }
+
+    // Découpe une liste d'items en segments à chaque sous-chapitre rencontré : un
+    // éventuel segment "sans titre" avant le premier sous-chapitre, puis un segment par
+    // sous-chapitre (avec son titre + tout ce qui suit jusqu'au sous-chapitre suivant).
+    // Chaque segment de sous-chapitre est rendu dans un bloc repliable/dépliable.
+    async function renderFieldItems(items) {
+      const groups = [];
+      let current = { subsection: null, items: [] };
+      for (const item of items) {
+        if (item.kind === 'subsection') {
+          groups.push(current);
+          current = { subsection: item.subsection, items: [] };
+        } else {
+          current.items.push(item);
+        }
+      }
+      groups.push(current);
+
+      const parts = [];
+      for (const group of groups) {
+        const innerHtml = await renderItemsList(group.items);
+        if (group.subsection) {
+          const s = group.subsection;
+          const color = s.color || '#1B7A3D';
+          const bodyId = 'subsecBody_' + s.id;
+          const isCollapsed = !!collapsedSubsections[s.id];
+          parts.push(`
+            <div class="form-subsection form-subsection-toggle${isCollapsed ? ' collapsed' : ''}" style="border-bottom-color:${color};" data-subsection-id="${s.id}" data-target="${bodyId}">
+              <h3 style="color:${color};"><span class="subsection-caret">▾</span> ${escapeHtml(s.title)}</h3>
+            </div>
+            <div class="form-subsection-body${isCollapsed ? ' collapsed' : ''}" id="${bodyId}">${innerHtml}</div>
+          `);
+        } else if (innerHtml) {
+          parts.push(innerHtml);
+        }
+      }
+      return parts.join('');
     }
 
     gateGroups = [];
@@ -1397,6 +1459,21 @@
       hideMsg();
       const attachArea = document.getElementById('attachActionArea');
       if (attachArea) attachArea.innerHTML = '';
+    });
+
+    // Repli/dépli des sous-chapitres : un clic sur l'en-tête bascule l'affichage du bloc
+    // de champs qui le suit. L'état (replié/ouvert) est mémorisé par sous-chapitre dans
+    // collapsedSubsections, pour rester cohérent si le formulaire est re-rendu (validation,
+    // changement d'onglet, etc.) tant que la page n'est pas rechargée.
+    formEl.querySelectorAll('.form-subsection-toggle').forEach(header => {
+      header.addEventListener('click', () => {
+        const subId = header.dataset.subsectionId;
+        const body = document.getElementById(header.dataset.target);
+        const nowCollapsed = !header.classList.contains('collapsed');
+        header.classList.toggle('collapsed', nowCollapsed);
+        if (body) body.classList.toggle('collapsed', nowCollapsed);
+        collapsedSubsections[subId] = nowCollapsed;
+      });
     });
 
     // Onglets sur lesquels le bouton Envoyer (et Réinitialiser) ne doit pas apparaître —
