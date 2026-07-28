@@ -363,7 +363,28 @@
 
   /* Combobox recherche (colonnes Référence) */
   .combo { position: relative; }
-  .combo-input { font-size: 16px; } /* évite le zoom auto sur iOS */
+  .combo-input { font-size: 16px; padding-right: 34px; } /* évite le zoom auto sur iOS ; place réservée au bouton d'effacement */
+  .combo-clear {
+    display: none;
+    position: absolute;
+    right: 6px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 24px;
+    height: 24px;
+    border: none;
+    border-radius: 50%;
+    background: #e2e8f0;
+    color: var(--muted);
+    font-size: 13px;
+    line-height: 1;
+    cursor: pointer;
+    align-items: center;
+    justify-content: center;
+    z-index: 5;
+  }
+  .combo-clear.visible { display: flex; }
+  .combo-clear:hover { background: #cbd5e1; }
   .combo-list {
     display: none;
     position: absolute;
@@ -409,6 +430,14 @@
     .cfg-row { grid-template-columns: auto auto 1fr; }
     .cfg-row .order-input { grid-column: 3; justify-self: start; width: 70px; }
     .field-row-2col { grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); }
+    .form-tabs-nav {
+      position: sticky;
+      top: 0;
+      z-index: 40;
+      background: var(--bg);
+      margin: 0 -14px 16px;
+      padding: 10px 14px;
+    }
   }
 
   /* ---------- Impression / PDF ---------- */
@@ -1729,6 +1758,7 @@
           <div class="combo" data-col="${col.colId}">
             <input type="text" class="combo-input" id="${id}" data-col="${col.colId}"
               placeholder="Rechercher…" autocomplete="off" />
+            <button type="button" class="combo-clear" data-col="${col.colId}" title="Effacer">✕</button>
             <input type="hidden" class="combo-proxy" data-col="${col.colId}" ${reqAttr} />
             <div class="combo-list" data-col="${col.colId}"></div>
           </div>
@@ -1757,6 +1787,7 @@
           <div class="combo" data-col="${col.colId}">
             <input type="text" class="combo-input" id="${id}" data-col="${col.colId}"
               placeholder="Rechercher…" autocomplete="off" />
+            <button type="button" class="combo-clear" data-col="${col.colId}" title="Effacer">✕</button>
             <input type="hidden" class="combo-proxy" data-col="${col.colId}" ${reqAttr} />
             <div class="combo-list" data-col="${col.colId}"></div>
           </div>
@@ -2181,6 +2212,7 @@
     const input = wrapper.querySelector('.combo-input');
     const listEl = wrapper.querySelector('.combo-list');
     const proxy = wrapper.querySelector('.combo-proxy');
+    const clearBtn = wrapper.querySelector('.combo-clear');
     const tagsEl = isList ? document.querySelector(`.combo-tags[data-col="${colId}"]`) : null;
 
     comboState[colId] = isList ? [] : null;
@@ -2205,6 +2237,27 @@
       } else {
         proxy.value = comboState[colId] ? String(comboState[colId].value) : '';
       }
+      // Le bouton d'effacement (croix) n'apparaît que si une valeur est actuellement
+      // sélectionnée — pratique sur mobile où reprendre la saisie caractère par
+      // caractère pour vider le champ est peu commode.
+      if (clearBtn) {
+        const hasValue = isList ? comboState[colId].length > 0 : !!comboState[colId];
+        clearBtn.classList.toggle('visible', hasValue);
+      }
+    }
+
+    if (clearBtn) {
+      clearBtn.addEventListener('click', () => {
+        if (isList) {
+          comboState[colId] = [];
+          renderTags();
+        } else {
+          comboState[colId] = null;
+          input.value = '';
+        }
+        updateProxy();
+        notifyDependents(colId);
+      });
     }
 
     function renderTags() {
@@ -2308,6 +2361,8 @@
         if (wrapper) {
           wrapper.querySelector('.combo-input').value = '';
           wrapper.querySelector('.combo-proxy').value = '';
+          const clearBtn = wrapper.querySelector('.combo-clear');
+          if (clearBtn) clearBtn.classList.remove('visible');
         }
         if (isList) {
           const tagsEl = document.querySelector(`.combo-tags[data-col="${col.colId}"]`);
