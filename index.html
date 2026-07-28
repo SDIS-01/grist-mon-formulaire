@@ -1571,7 +1571,7 @@
 
     // Onglets sur lesquels le bouton Envoyer (et Réinitialiser) ne doit pas apparaître —
     // ce sont des onglets de consultation seule, pas de saisie à valider.
-    const NO_SUBMIT_TABS = ['Projet & Action', 'Rapport'];
+    const NO_SUBMIT_TABS = ['Extraction'];
 
     // Navigation entre onglets (masquage CSS uniquement : les champs des autres onglets
     // restent dans le DOM et fonctionnent normalement en arrière-plan). Fonction
@@ -1672,16 +1672,13 @@
 
     // Tableau combiné : c'est ici, à la place du champ "Liste des enregistrements", que
     // le tableau regroupant Nom/Nature/Avancement/Commentaire (lus directement sur
-    // chaque ligne d'origine, donc toujours alignés) est affiché.
+    // chaque ligne d'origine, donc toujours alignés) est affiché. Pas de label ni de
+    // commentaire ici : ce champ n'est qu'un emplacement technique, pas une donnée à nommer.
     const ct = currentOptions.combinedTable;
     if (ct && col.colId === ct.recordsCol) {
       return `
-        <div>
-          <label for="${id}">${col.label}</label>
-          ${commentHtml(col)}
-          <div class="combined-table-wrap" id="${id}" data-combined-table="1">
-            <span class="formula-preview-placeholder">Se remplit après sélection du champ lié</span>
-          </div>
+        <div class="combined-table-wrap" id="${id}" data-combined-table="1">
+          <span class="formula-preview-placeholder">Se remplit après sélection du champ lié</span>
         </div>`;
     }
 
