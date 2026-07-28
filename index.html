@@ -1845,10 +1845,7 @@
       } catch (e) {}
       let options = choices
         .filter(c => c !== null && c !== undefined && String(c).trim() !== '')
-        .map(c => ({ value: c, label: c }));
-      if (fieldRequiresMeoFilter(col)) {
-        options = options.filter(o => o.label.toLowerCase().includes('meo'));
-      }
+        .map(c => ({ value: c, label: c, isMeo: String(c).toLowerCase().includes('meo') }));
       comboOptionsCache[col.colId] = options;
       const isList = type === 'ChoiceList';
       return `
@@ -1912,18 +1909,14 @@
         // Pas de "Colonne à afficher" définie dans Grist : on garde l'identifiant comme repli
         label = `#${data.id[i]}`;
       }
-      const opt = { value: data.id[i], label };
+      const opt = { value: data.id[i], label, isMeo: label.toLowerCase().includes('meo') };
       if (linkColId && data[linkColId]) {
         opt.filterRaw = data[linkColId][i];
       }
       options.push(opt);
     }
-    let filteredOptions = options;
-    if (fieldRequiresMeoFilter(col)) {
-      filteredOptions = filteredOptions.filter(o => o.label.toLowerCase().includes('meo'));
-    }
-    filteredOptions.sort((a, b) => a.label.localeCompare(b.label, 'fr', { sensitivity: 'base' }));
-    return filteredOptions;
+    options.sort((a, b) => a.label.localeCompare(b.label, 'fr', { sensitivity: 'base' }));
+    return options;
   }
 
   // Un champ dont le libellé actuel contient "MEO" (insensible à la casse) ne doit
@@ -2289,12 +2282,24 @@
     comboState[colId] = isList ? [] : null;
 
     // Sous-ensemble des options actuellement disponibles compte tenu du champ parent
-    // (si le parent n'a pas encore de valeur, on montre tout, sans filtrer).
+    // (si le parent n'a pas encore de valeur, on montre tout, sans filtrer). Si ce champ
+    // doit se limiter aux libellés contenant "MEO", on applique ce filtre en plus — mais
+    // seulement s'il reste au moins une option après filtrage : sinon (aucune action ne
+    // contient "MEO" pour ce projet), on retombe sur la liste complète plutôt que de
+    // laisser le champ vide.
     function getAvailableOptions() {
-      if (!dep) return options;
-      const parentValue = getFieldRawValue(dep.parentColId);
-      if (parentValue === null || parentValue === undefined || parentValue === '') return options;
-      return options.filter(o => o.filterRaw !== undefined && o.filterRaw !== null && String(o.filterRaw) === String(parentValue));
+      let avail = options;
+      if (dep) {
+        const parentValue = getFieldRawValue(dep.parentColId);
+        if (parentValue !== null && parentValue !== undefined && parentValue !== '') {
+          avail = avail.filter(o => o.filterRaw !== undefined && o.filterRaw !== null && String(o.filterRaw) === String(parentValue));
+        }
+      }
+      if (fieldRequiresMeoFilter(col)) {
+        const meoOnly = avail.filter(o => o.isMeo);
+        if (meoOnly.length) return meoOnly;
+      }
+      return avail;
     }
 
     function isSelected(opt) {
