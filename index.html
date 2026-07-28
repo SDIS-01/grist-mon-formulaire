@@ -962,7 +962,7 @@
   function addCombinedTableConfigBlock() {
     syncCombinedTablesDraftFromDOM();
     combinedTablesDraft.push({
-      recordsCols: [], nameField: null, natureField: null, avancementField: null, commentField: null,
+      recordsCols: [], nameField: null, natureField: null, avancementField: null, commentField: null, porteurField: null,
       group2Values: [], group1Label: '', group2Label: '',
     });
     renderCombinedTablesConfig();
@@ -985,10 +985,12 @@
         <select id="cfgCombRecordsCol_${idx}" class="cfg-ct-records" data-idx="${idx}" multiple size="4"></select>
         <label for="cfgCombNameField_${idx}" style="margin-top:6px;">Champ "Nom" (sur la table d'origine)</label>
         <select id="cfgCombNameField_${idx}"></select>
-        <label for="cfgCombNatureField_${idx}" style="margin-top:6px;">Champ "Nature" (facultatif — sert à répartir en 2 groupes ; laisser "— Aucun —" pour un tableau simple)</label>
+        <label for="cfgCombNatureField_${idx}" style="margin-top:6px;">Champ "Nature" (facultatif — sert à répartir en 2 groupes ; laisser "— Aucun —" pour ne pas avoir cette colonne)</label>
         <select id="cfgCombNatureField_${idx}"></select>
         <label for="cfgCombAvancementField_${idx}" style="margin-top:6px;">Champ "Avancement"</label>
         <select id="cfgCombAvancementField_${idx}"></select>
+        <label for="cfgCombPorteurField_${idx}" style="margin-top:6px;">Champ "Porteur" (facultatif — laisser "— Aucun —" pour ne pas avoir cette colonne)</label>
+        <select id="cfgCombPorteurField_${idx}"></select>
         <label for="cfgCombCommentField_${idx}" style="margin-top:6px;">Champ "Commentaire"</label>
         <select id="cfgCombCommentField_${idx}"></select>
         <label for="cfgCombGroup2Values_${idx}" style="margin-top:6px;">Valeur(s) de Nature pour le 2ᵉ groupe (séparées par virgule, ex. MEO)</label>
@@ -1005,7 +1007,7 @@
       document.getElementById(`cfgCombRecordsCol_${idx}`).innerHTML = refListCols
         .map(c => `<option value="${c.colId}"${(ct.recordsCols || []).includes(c.colId) ? ' selected' : ''}>${escapeHtml(c.label)} (${c.colId})</option>`)
         .join('');
-      refreshCombinedFieldSelects(idx, ct.nameField, ct.natureField, ct.avancementField, ct.commentField);
+      refreshCombinedFieldSelects(idx, ct.nameField, ct.natureField, ct.avancementField, ct.commentField, ct.porteurField);
     });
 
     list.querySelectorAll('.cfg-ct-delete').forEach(btn => {
@@ -1020,9 +1022,9 @@
     });
   }
 
-  // Peuple les 4 sélecteurs de champs d'un bloc donné à partir des colonnes de la table
+  // Peuple les sélecteurs de champs d'un bloc donné à partir des colonnes de la table
   // ciblée par sa 1ère colonne "Liste des enregistrements" choisie.
-  function refreshCombinedFieldSelects(idx, preselectName, preselectNature, preselectAvancement, preselectComment) {
+  function refreshCombinedFieldSelects(idx, preselectName, preselectNature, preselectAvancement, preselectComment, preselectPorteur) {
     const selected = Array.from(document.getElementById(`cfgCombRecordsCol_${idx}`).selectedOptions).map(o => o.value);
     const recordsField = mergedConfig.find(c => c.colId === selected[0]);
     const targetCols = recordsField ? getColumnsMetaForTable(recordsField.type.split(':')[1]) : [];
@@ -1033,10 +1035,12 @@
     document.getElementById(`cfgCombNatureField_${idx}`).innerHTML = fieldOptions;
     document.getElementById(`cfgCombAvancementField_${idx}`).innerHTML = fieldOptions;
     document.getElementById(`cfgCombCommentField_${idx}`).innerHTML = fieldOptions;
+    document.getElementById(`cfgCombPorteurField_${idx}`).innerHTML = fieldOptions;
     document.getElementById(`cfgCombNameField_${idx}`).value = preselectName || '';
     document.getElementById(`cfgCombNatureField_${idx}`).value = preselectNature || '';
     document.getElementById(`cfgCombAvancementField_${idx}`).value = preselectAvancement || '';
     document.getElementById(`cfgCombCommentField_${idx}`).value = preselectComment || '';
+    document.getElementById(`cfgCombPorteurField_${idx}`).value = preselectPorteur || '';
   }
 
   // Relit les valeurs actuellement affichées dans le DOM (si des blocs existent déjà)
@@ -1051,6 +1055,7 @@
       ct.natureField = document.getElementById(`cfgCombNatureField_${idx}`).value || null;
       ct.avancementField = document.getElementById(`cfgCombAvancementField_${idx}`).value || null;
       ct.commentField = document.getElementById(`cfgCombCommentField_${idx}`).value || null;
+      ct.porteurField = document.getElementById(`cfgCombPorteurField_${idx}`).value || null;
       ct.group2Values = document.getElementById(`cfgCombGroup2Values_${idx}`).value.split(',').map(s => s.trim()).filter(Boolean);
       ct.group1Label = document.getElementById(`cfgCombGroup1Label_${idx}`).value.trim();
       ct.group2Label = document.getElementById(`cfgCombGroup2Label_${idx}`).value.trim();
@@ -1370,6 +1375,7 @@
         natureField: ct.natureField || null,
         avancementField: ct.avancementField || null,
         commentField: ct.commentField || null,
+        porteurField: ct.porteurField || null,
         group2Values: ct.group2Values || [],
         group1Label: ct.group1Label || 'Groupe 1',
         group2Label: ct.group2Label || 'Groupe 2',
@@ -2187,20 +2193,24 @@
     if (!recordsInfo || !el) return;
     const targetTable2 = recordsCol.type.split(':')[1]; // table pointée par la RefList (ex. LISTE_ACTION_MEO)
 
+    const showNature = !!cfg.natureField;
+    const showPorteur = !!cfg.porteurField;
+
     function renderGroup(title, rows) {
       if (!rows.length) return '';
       const rowsHtml = rows.map(r => `
         <tr>
           <td>${escapeHtml(r.nom)}</td>
-          <td>${escapeHtml(r.nature)}</td>
+          ${showNature ? `<td>${escapeHtml(r.nature)}</td>` : ''}
           <td class="ct-col-avancement">${escapeHtml(r.avancement)}</td>
+          ${showPorteur ? `<td>${escapeHtml(r.porteur)}</td>` : ''}
           <td>${escapeHtml(r.commentaire)}</td>
         </tr>`).join('');
       return `
         <div class="combined-table-group">
           <h4>${escapeHtml(title)}</h4>
           <table class="combined-table">
-            <thead><tr><th>Nom</th><th>Nature</th><th>Avancement</th><th>Commentaire</th></tr></thead>
+            <thead><tr><th>Nom</th>${showNature ? '<th>Nature</th>' : ''}<th>Avancement</th>${showPorteur ? '<th>Porteur</th>' : ''}<th>Commentaire</th></tr></thead>
             <tbody>${rowsHtml}</tbody>
           </table>
         </div>`;
@@ -2250,19 +2260,23 @@
         const natureRaw = (cfg.natureField && data2[cfg.natureField]) ? data2[cfg.natureField][idx2] : null;
         const avancementRaw = (cfg.avancementField && data2[cfg.avancementField]) ? data2[cfg.avancementField][idx2] : null;
         const commentRaw = (cfg.commentField && data2[cfg.commentField]) ? data2[cfg.commentField][idx2] : null;
+        const porteurRaw = (cfg.porteurField && data2[cfg.porteurField]) ? data2[cfg.porteurField][idx2] : null;
 
         const nature = isEmptyish(natureRaw) ? '' : String(natureRaw).trim();
-        // Détection MEO : d'après la valeur de Nature si disponible, ou à défaut d'après
-        // le nom lui-même (motif "..._MEO<numéro>_...", ex. "2024_02_P_MEO1_..."), qui
-        // sert aussi à extraire le numéro pour trier les actions MEO dans l'ordre.
+        // Détection MEO : d'après la valeur de Nature si disponible (uniquement si ce
+        // champ est configuré), ou à défaut d'après le nom lui-même (motif
+        // "..._MEO<numéro>_...", ex. "2024_02_P_MEO1_..."), qui sert aussi à extraire le
+        // numéro pour trier les actions MEO dans l'ordre.
         const meoMatch = nom.match(/_MEO(\d+)_/i);
         const row = {
           nom,
-          nature: nature || (meoMatch ? 'MEO' : ''),
+          nature: showNature ? (nature || (meoMatch ? 'MEO' : '')) : '',
           avancement: formatMaybePercent(avancementRaw),
+          porteur: isEmptyish(porteurRaw) ? '' : String(porteurRaw).trim(),
           commentaire: isEmptyish(commentRaw) ? '' : String(commentRaw).trim(),
         };
-        const isMeo = (nature && group2Values.some(v => v && nature.toLowerCase().includes(v))) || !!meoMatch;
+        const groupingEnabled = group2Values.length > 0;
+        const isMeo = groupingEnabled && ((showNature && nature && group2Values.some(v => v && nature.toLowerCase().includes(v))) || !!meoMatch);
         if (isMeo) {
           row.meoNum = meoMatch ? parseInt(meoMatch[1], 10) : Infinity;
           group2Rows.push(row);
