@@ -487,16 +487,18 @@
       </div>
     </div>
     <div class="cfg-block">
-      <label>📊 Tableau combiné (regroupe 4 colonnes formule liste en un tableau, réparti par nature)</label>
-      <div class="cfg-col-name" style="margin-bottom:8px;">Choisissez les 4 colonnes formule sources (elles doivent provenir du même lookupRecords), et les libellés des deux groupes. Laissez "— Aucune —" sur la colonne Nom pour désactiver.</div>
-      <label for="cfgCombNameCol" style="margin-top:6px;">Colonne "Nom"</label>
-      <select id="cfgCombNameCol"></select>
-      <label for="cfgCombNatureCol" style="margin-top:6px;">Colonne "Nature" (sert à répartir en 2 groupes)</label>
-      <select id="cfgCombNatureCol"></select>
-      <label for="cfgCombAvancementCol" style="margin-top:6px;">Colonne "Avancement"</label>
-      <select id="cfgCombAvancementCol"></select>
-      <label for="cfgCombCommentCol" style="margin-top:6px;">Colonne "Commentaire"</label>
-      <select id="cfgCombCommentCol"></select>
+      <label>📊 Tableau combiné (regroupe une liste de références en un tableau, réparti par nature)</label>
+      <div class="cfg-col-name" style="margin-bottom:8px;">Choisissez la colonne formule qui donne la liste des enregistrements liés (type RefList), puis les 4 champs à afficher, lus directement sur chaque ligne d'origine — garantit qu'ils restent alignés. Laissez "— Aucune —" sur la 1ère liste pour désactiver.</div>
+      <label for="cfgCombRecordsCol" style="margin-top:6px;">Colonne "Liste des enregistrements" (RefList)</label>
+      <select id="cfgCombRecordsCol"></select>
+      <label for="cfgCombNameField" style="margin-top:6px;">Champ "Nom" (sur la table d'origine)</label>
+      <select id="cfgCombNameField"></select>
+      <label for="cfgCombNatureField" style="margin-top:6px;">Champ "Nature" (sert à répartir en 2 groupes)</label>
+      <select id="cfgCombNatureField"></select>
+      <label for="cfgCombAvancementField" style="margin-top:6px;">Champ "Avancement"</label>
+      <select id="cfgCombAvancementField"></select>
+      <label for="cfgCombCommentField" style="margin-top:6px;">Champ "Commentaire"</label>
+      <select id="cfgCombCommentField"></select>
       <label for="cfgCombGroup2Values" style="margin-top:6px;">Valeur(s) de Nature pour le 2ᵉ groupe (séparées par virgule, ex. MEO)</label>
       <input type="text" id="cfgCombGroup2Values" placeholder="MEO" />
       <label for="cfgCombGroup1Label" style="margin-top:6px;">Titre du 1er groupe (tout le reste)</label>
@@ -641,6 +643,7 @@
   document.getElementById('cfgAddSection').addEventListener('click', addSection);
   document.getElementById('cfgAddSubsection').addEventListener('click', addSubsection);
   document.getElementById('cfgAddLink').addEventListener('click', addExternalLink);
+  document.getElementById('cfgCombRecordsCol').addEventListener('change', () => refreshCombinedFieldSelects());
 
   async function bootstrap() {
     allTableIds = await grist.docApi.listTables();
@@ -921,24 +924,43 @@
     renderConfigList();
   }
 
-  // Remplit les 4 listes déroulantes du bloc "Tableau combiné" avec les colonnes formule
-  // disponibles, et restaure les valeurs déjà enregistrées le cas échéant.
+  // Remplit la liste déroulante "Liste des enregistrements" avec les colonnes formule de
+  // type RefList disponibles, restaure la valeur enregistrée, puis peuple les 4 champs
+  // (Nom/Nature/Avancement/Commentaire) en fonction de la table ciblée par ce choix.
   function populateCombinedTableConfig() {
     const ct = currentOptions.combinedTable || {};
-    const formulaCols = mergedConfig.filter(c => c.isFormula);
+    const refListCols = mergedConfig.filter(c => c.isFormula && c.type.startsWith('RefList:'));
     const options = ['<option value="">— Aucune —</option>']
-      .concat(formulaCols.map(c => `<option value="${c.colId}">${escapeHtml(c.label)} (${c.colId})</option>`))
+      .concat(refListCols.map(c => `<option value="${c.colId}">${escapeHtml(c.label)} (${c.colId})</option>`))
       .join('');
-    ['cfgCombNameCol', 'cfgCombNatureCol', 'cfgCombAvancementCol', 'cfgCombCommentCol'].forEach(id => {
-      document.getElementById(id).innerHTML = options;
-    });
-    document.getElementById('cfgCombNameCol').value = ct.nameCol || '';
-    document.getElementById('cfgCombNatureCol').value = ct.natureCol || '';
-    document.getElementById('cfgCombAvancementCol').value = ct.avancementCol || '';
-    document.getElementById('cfgCombCommentCol').value = ct.commentCol || '';
+    document.getElementById('cfgCombRecordsCol').innerHTML = options;
+    document.getElementById('cfgCombRecordsCol').value = ct.recordsCol || '';
+
+    refreshCombinedFieldSelects(ct.nameField, ct.natureField, ct.avancementField, ct.commentField);
+
     document.getElementById('cfgCombGroup2Values').value = (ct.group2Values || []).join(', ');
     document.getElementById('cfgCombGroup1Label').value = ct.group1Label || '';
     document.getElementById('cfgCombGroup2Label').value = ct.group2Label || '';
+  }
+
+  // Peuple les 4 sélecteurs de champs à partir des colonnes de la table ciblée par la
+  // colonne "Liste des enregistrements" actuellement choisie. Appelé à l'ouverture du
+  // panneau et à chaque changement de ce choix.
+  function refreshCombinedFieldSelects(preselectName, preselectNature, preselectAvancement, preselectComment) {
+    const recordsColId = document.getElementById('cfgCombRecordsCol').value;
+    const recordsField = mergedConfig.find(c => c.colId === recordsColId);
+    const targetCols = recordsField ? getColumnsMetaForTable(recordsField.type.split(':')[1]) : [];
+    const fieldOptions = ['<option value="">— Aucun —</option>']
+      .concat(targetCols.map(tc => `<option value="${tc.colId}">${escapeHtml(tc.label)} (${tc.colId})</option>`))
+      .join('');
+    document.getElementById('cfgCombNameField').innerHTML = fieldOptions;
+    document.getElementById('cfgCombNatureField').innerHTML = fieldOptions;
+    document.getElementById('cfgCombAvancementField').innerHTML = fieldOptions;
+    document.getElementById('cfgCombCommentField').innerHTML = fieldOptions;
+    document.getElementById('cfgCombNameField').value = preselectName || '';
+    document.getElementById('cfgCombNatureField').value = preselectNature || '';
+    document.getElementById('cfgCombAvancementField').value = preselectAvancement || '';
+    document.getElementById('cfgCombCommentField').value = preselectComment || '';
   }
 
   function hideConfig() {
@@ -1245,12 +1267,13 @@
     await grist.setOption('attachFormUrl', attachFormUrl || null);
     currentOptions.attachFormUrl = attachFormUrl || null;
 
-    const combNameCol = document.getElementById('cfgCombNameCol').value;
-    const combinedTable = combNameCol ? {
-      nameCol: combNameCol,
-      natureCol: document.getElementById('cfgCombNatureCol').value || null,
-      avancementCol: document.getElementById('cfgCombAvancementCol').value || null,
-      commentCol: document.getElementById('cfgCombCommentCol').value || null,
+    const combRecordsCol = document.getElementById('cfgCombRecordsCol').value;
+    const combinedTable = combRecordsCol ? {
+      recordsCol: combRecordsCol,
+      nameField: document.getElementById('cfgCombNameField').value || null,
+      natureField: document.getElementById('cfgCombNatureField').value || null,
+      avancementField: document.getElementById('cfgCombAvancementField').value || null,
+      commentField: document.getElementById('cfgCombCommentField').value || null,
       group2Values: document.getElementById('cfgCombGroup2Values').value.split(',').map(s => s.trim()).filter(Boolean),
       group1Label: document.getElementById('cfgCombGroup1Label').value.trim() || 'Groupe 1',
       group2Label: document.getElementById('cfgCombGroup2Label').value.trim() || 'Groupe 2',
@@ -1583,15 +1606,15 @@
 
     // Champs formule pour lesquels un aperçu en direct est possible (recopie simple
     // depuis une référence) : on branche leur mise à jour dès que la référence change.
-    // Le champ "Nom" du tableau combiné (s'il est configuré) est traité à part par
-    // setupCombinedTablePreview ci-dessous, pas par le mécanisme d'aperçu standard.
+    // Le champ "Liste des enregistrements" du tableau combiné (s'il est configuré) est
+    // traité à part par setupCombinedTablePreview ci-dessous, pas par l'aperçu standard.
     const combinedTableCfg = currentOptions.combinedTable;
     included
-      .filter(col => col.isFormula && !(combinedTableCfg && col.colId === combinedTableCfg.nameCol))
+      .filter(col => col.isFormula && !(combinedTableCfg && col.colId === combinedTableCfg.recordsCol))
       .forEach(setupFormulaPreview);
     if (combinedTableCfg) {
-      const nameField = included.find(c => c.colId === combinedTableCfg.nameCol);
-      if (nameField) setupCombinedTablePreview(nameField, combinedTableCfg);
+      const recordsField = included.find(c => c.colId === combinedTableCfg.recordsCol);
+      if (recordsField) setupCombinedTablePreview(recordsField, combinedTableCfg);
     }
 
     // Les champs "parents" qui ne sont pas des combos (Texte, Numérique, Date, etc.)
@@ -1647,16 +1670,11 @@
     const reqAttr = '';
     const reqMark = col.required ? ' <span class="req">*</span>' : '';
 
-    // Tableau combiné : ce champ ne fait que fournir les données (Nature/Avancement/
-    // Commentaire) au tableau rendu à la place du champ "Nom" — il ne s'affiche pas lui-même.
+    // Tableau combiné : c'est ici, à la place du champ "Liste des enregistrements", que
+    // le tableau regroupant Nom/Nature/Avancement/Commentaire (lus directement sur
+    // chaque ligne d'origine, donc toujours alignés) est affiché.
     const ct = currentOptions.combinedTable;
-    if (ct && (col.colId === ct.natureCol || col.colId === ct.avancementCol || col.colId === ct.commentCol)) {
-      return '';
-    }
-
-    // Tableau combiné : c'est ici, à la place du champ "Nom", que le tableau regroupant
-    // Nom/Avancement/Commentaire (réparti en 2 groupes selon Nature) est affiché.
-    if (ct && col.colId === ct.nameCol) {
+    if (ct && col.colId === ct.recordsCol) {
       return `
         <div>
           <label for="${id}">${col.label}</label>
@@ -2035,12 +2053,12 @@
     formulaCallbacks[col.colId](); // état initial (généralement vide tant que rien n'est sélectionné)
   }
 
-  // Normalise une valeur brute de liste Grist (marqueur ["L", v1, v2, ...] ou tableau simple)
-  // en un tableau JS classique de valeurs, chaîne, trim, en filtrant les entrées vides.
-  function normalizeListRaw(raw) {
+  // Normalise une valeur brute de colonne RefList Grist (marqueur ["L", id1, id2, ...] ou
+  // tableau simple) en un tableau JS classique d'identifiants de ligne (nombres entiers).
+  function normalizeRefListRaw(raw) {
     if (raw === null || raw === undefined || raw === '') return [];
     const values = Array.isArray(raw) ? (raw[0] === 'L' ? raw.slice(1) : raw) : [raw];
-    return values.map(v => (v === null || v === undefined) ? '' : String(v).trim());
+    return values.filter(v => typeof v === 'number' && v > 0);
   }
 
   // Formate une valeur d'avancement en pourcentage lisible ("0.791666..." -> "79 %").
@@ -2055,20 +2073,15 @@
     return s;
   }
 
-  // Branche et affiche le "tableau combiné" : recombine 4 colonnes formule liste
-  // (Nom, Nature, Avancement, Commentaire), toutes issues du même lookupRecords, en un
-  // tableau ligne à ligne, réparti en 2 groupes selon la valeur de Nature.
-  function setupCombinedTablePreview(nameCol, cfg) {
-    const nameInfo = formulaPreviewInfo[nameCol.colId];
-    const el = document.getElementById('f_' + nameCol.colId);
-    if (!nameInfo || !el) return;
-
-    const natureField = mergedConfig.find(c => c.colId === cfg.natureCol);
-    const avancementField = mergedConfig.find(c => c.colId === cfg.avancementCol);
-    const commentField = mergedConfig.find(c => c.colId === cfg.commentCol);
-    const natureInfo = natureField ? formulaPreviewInfo[natureField.colId] : null;
-    const avancementInfo = avancementField ? formulaPreviewInfo[avancementField.colId] : null;
-    const commentInfo = commentField ? formulaPreviewInfo[commentField.colId] : null;
+  // Branche et affiche le "tableau combiné" : à partir d'une colonne formule RefList
+  // (liste d'enregistrements liés, tous issus du même lookupRecords), lit les 4 champs
+  // Nom/Nature/Avancement/Commentaire directement sur chaque ligne d'origine — donc
+  // toujours parfaitement alignés, contrairement à 4 listes calculées séparément.
+  function setupCombinedTablePreview(recordsCol, cfg) {
+    const recordsInfo = formulaPreviewInfo[recordsCol.colId];
+    const el = document.getElementById('f_' + recordsCol.colId);
+    if (!recordsInfo || !el) return;
+    const targetTable2 = recordsCol.type.split(':')[1]; // table pointée par la RefList (ex. LISTE_ACTION_MEO)
 
     function renderGroup(title, rows) {
       if (!rows.length) return '';
@@ -2089,9 +2102,9 @@
         </div>`;
     }
 
-    const rebuild = () => {
-      const refValue = getFieldRawValue(nameInfo.refColId);
-      const data = refOptionsCache[nameInfo.targetTable];
+    const rebuild = async () => {
+      const refValue = getFieldRawValue(recordsInfo.refColId);
+      const data = refOptionsCache[recordsInfo.targetTable];
       if (refValue === null || refValue === undefined || refValue === '' || !data) {
         el.innerHTML = '<span class="formula-preview-placeholder">Se remplit après sélection du champ lié</span>';
         return;
@@ -2103,34 +2116,49 @@
         return;
       }
 
-      const noms = normalizeListRaw(data[nameInfo.subColId] ? data[nameInfo.subColId][idx] : null);
-      const natures = natureInfo ? normalizeListRaw(data[natureInfo.subColId] ? data[natureInfo.subColId][idx] : null) : [];
-      const avancements = avancementInfo ? normalizeListRaw(data[avancementInfo.subColId] ? data[avancementInfo.subColId][idx] : null) : [];
-      const commentaires = commentInfo ? normalizeListRaw(data[commentInfo.subColId] ? data[commentInfo.subColId][idx] : null) : [];
-
-      const validNoms = noms.filter(n => !isEmptyish(n));
-      if (!validNoms.length) {
+      const rowIds = normalizeRefListRaw(data[recordsInfo.subColId] ? data[recordsInfo.subColId][idx] : null);
+      if (!rowIds.length) {
         el.innerHTML = '<span class="formula-preview-placeholder">Aucun élément</span>';
         return;
       }
 
+      if (!refOptionsCache[targetTable2]) {
+        try {
+          refOptionsCache[targetTable2] = await grist.docApi.fetchTable(targetTable2);
+        } catch (err) {
+          console.error('Impossible de charger la table', targetTable2, err);
+          el.innerHTML = '<span class="formula-preview-placeholder">Erreur de chargement</span>';
+          return;
+        }
+      }
+      const data2 = refOptionsCache[targetTable2];
+
       const group2Values = (cfg.group2Values || []).map(v => v.toLowerCase());
       const group1Rows = [];
       const group2Rows = [];
-      noms.forEach((nom, i) => {
-        if (isEmptyish(nom)) return; // ligne sans nom : rien à afficher, on l'ignore
-        const nature = (natures[i] || '').toLowerCase();
-        const meoMatch = nom.match(/_MEO(\d+)_/i);
-        const row = {
-          nom,
-          nature: isEmptyish(natures[i]) ? (meoMatch ? 'MEO' : '') : natures[i],
-          avancement: formatMaybePercent(avancements[i]),
-          commentaire: isEmptyish(commentaires[i]) ? '' : commentaires[i],
-        };
+
+      rowIds.forEach(rowId => {
+        const idx2 = data2.id.indexOf(rowId);
+        if (idx2 === -1) return;
+        const nomRaw = (cfg.nameField && data2[cfg.nameField]) ? data2[cfg.nameField][idx2] : null;
+        if (isEmptyish(nomRaw)) return; // ligne sans nom : rien à afficher, on l'ignore
+        const nom = String(nomRaw).trim();
+        const natureRaw = (cfg.natureField && data2[cfg.natureField]) ? data2[cfg.natureField][idx2] : null;
+        const avancementRaw = (cfg.avancementField && data2[cfg.avancementField]) ? data2[cfg.avancementField][idx2] : null;
+        const commentRaw = (cfg.commentField && data2[cfg.commentField]) ? data2[cfg.commentField][idx2] : null;
+
+        const nature = isEmptyish(natureRaw) ? '' : String(natureRaw).trim();
         // Détection MEO : d'après la valeur de Nature si disponible, ou à défaut d'après
         // le nom lui-même (motif "..._MEO<numéro>_...", ex. "2024_02_P_MEO1_..."), qui
         // sert aussi à extraire le numéro pour trier les actions MEO dans l'ordre.
-        const isMeo = (nature && group2Values.some(v => v && nature.includes(v))) || !!meoMatch;
+        const meoMatch = nom.match(/_MEO(\d+)_/i);
+        const row = {
+          nom,
+          nature: nature || (meoMatch ? 'MEO' : ''),
+          avancement: formatMaybePercent(avancementRaw),
+          commentaire: isEmptyish(commentRaw) ? '' : String(commentRaw).trim(),
+        };
+        const isMeo = (nature && group2Values.some(v => v && nature.toLowerCase().includes(v))) || !!meoMatch;
         if (isMeo) {
           row.meoNum = meoMatch ? parseInt(meoMatch[1], 10) : Infinity;
           group2Rows.push(row);
@@ -2143,7 +2171,7 @@
       el.innerHTML = renderGroup(cfg.group1Label, group1Rows) + renderGroup(cfg.group2Label, group2Rows);
     };
 
-    formulaCallbacks[nameCol.colId] = rebuild;
+    formulaCallbacks[recordsCol.colId] = rebuild;
     rebuild();
   }
 
