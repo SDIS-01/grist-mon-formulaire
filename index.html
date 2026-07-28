@@ -408,7 +408,7 @@
     .gear { width: 30px; height: 30px; font-size: 14px; }
     .cfg-row { grid-template-columns: auto auto 1fr; }
     .cfg-row .order-input { grid-column: 3; justify-self: start; width: 70px; }
-    .field-row-2col { grid-template-columns: 1fr; }
+    .field-row-2col { grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); }
   }
 
   /* ---------- Impression / PDF ---------- */
