@@ -518,8 +518,8 @@
     <div class="cfg-block">
       <label>📊 Tableau combiné (regroupe une liste de références en un tableau, réparti par nature)</label>
       <div class="cfg-col-name" style="margin-bottom:8px;">Choisissez la colonne formule qui donne la liste des enregistrements liés (type RefList), puis les 4 champs à afficher, lus directement sur chaque ligne d'origine — garantit qu'ils restent alignés. Laissez "— Aucune —" sur la 1ère liste pour désactiver.</div>
-      <label for="cfgCombRecordsCol" style="margin-top:6px;">Colonne "Liste des enregistrements" (RefList)</label>
-      <select id="cfgCombRecordsCol"></select>
+      <label for="cfgCombRecordsCol" style="margin-top:6px;">Colonne(s) "Liste des enregistrements" (RefList) — Ctrl/Cmd+clic pour en choisir plusieurs, si le même tableau doit apparaître à plusieurs endroits du formulaire</label>
+      <select id="cfgCombRecordsCol" multiple size="4"></select>
       <label for="cfgCombNameField" style="margin-top:6px;">Champ "Nom" (sur la table d'origine)</label>
       <select id="cfgCombNameField"></select>
       <label for="cfgCombNatureField" style="margin-top:6px;">Champ "Nature" (sert à répartir en 2 groupes)</label>
@@ -958,12 +958,12 @@
   // (Nom/Nature/Avancement/Commentaire) en fonction de la table ciblée par ce choix.
   function populateCombinedTableConfig() {
     const ct = currentOptions.combinedTable || {};
+    const savedRecordsCols = ct.recordsCols || (ct.recordsCol ? [ct.recordsCol] : []); // compat anciennes config à 1 seule colonne
     const refListCols = mergedConfig.filter(c => c.isFormula && c.type.startsWith('RefList:'));
-    const options = ['<option value="">— Aucune —</option>']
-      .concat(refListCols.map(c => `<option value="${c.colId}">${escapeHtml(c.label)} (${c.colId})</option>`))
+    const options = refListCols
+      .map(c => `<option value="${c.colId}"${savedRecordsCols.includes(c.colId) ? ' selected' : ''}>${escapeHtml(c.label)} (${c.colId})</option>`)
       .join('');
     document.getElementById('cfgCombRecordsCol').innerHTML = options;
-    document.getElementById('cfgCombRecordsCol').value = ct.recordsCol || '';
 
     refreshCombinedFieldSelects(ct.nameField, ct.natureField, ct.avancementField, ct.commentField);
 
@@ -973,11 +973,12 @@
   }
 
   // Peuple les 4 sélecteurs de champs à partir des colonnes de la table ciblée par la
-  // colonne "Liste des enregistrements" actuellement choisie. Appelé à l'ouverture du
+  // 1ère colonne "Liste des enregistrements" actuellement choisie (les autres, si
+  // plusieurs, doivent pointer vers la même table source). Appelé à l'ouverture du
   // panneau et à chaque changement de ce choix.
   function refreshCombinedFieldSelects(preselectName, preselectNature, preselectAvancement, preselectComment) {
-    const recordsColId = document.getElementById('cfgCombRecordsCol').value;
-    const recordsField = mergedConfig.find(c => c.colId === recordsColId);
+    const selected = Array.from(document.getElementById('cfgCombRecordsCol').selectedOptions).map(o => o.value);
+    const recordsField = mergedConfig.find(c => c.colId === selected[0]);
     const targetCols = recordsField ? getColumnsMetaForTable(recordsField.type.split(':')[1]) : [];
     const fieldOptions = ['<option value="">— Aucun —</option>']
       .concat(targetCols.map(tc => `<option value="${tc.colId}">${escapeHtml(tc.label)} (${tc.colId})</option>`))
@@ -1296,9 +1297,9 @@
     await grist.setOption('attachFormUrl', attachFormUrl || null);
     currentOptions.attachFormUrl = attachFormUrl || null;
 
-    const combRecordsCol = document.getElementById('cfgCombRecordsCol').value;
-    const combinedTable = combRecordsCol ? {
-      recordsCol: combRecordsCol,
+    const combRecordsCols = Array.from(document.getElementById('cfgCombRecordsCol').selectedOptions).map(o => o.value);
+    const combinedTable = combRecordsCols.length ? {
+      recordsCols: combRecordsCols,
       nameField: document.getElementById('cfgCombNameField').value || null,
       natureField: document.getElementById('cfgCombNatureField').value || null,
       avancementField: document.getElementById('cfgCombAvancementField').value || null,
@@ -1430,6 +1431,7 @@
     const GATE_CONFIG = {
       'Projet & Action': ['Sélectionner Projet PEPS ou Action AV'],
       'Action MEO & Tâche': ['Sélectionner Projet PEPS ou Action AV', 'Sélectionner Action MEO'],
+      'Consultation rapide': ['Sélectionner Projet PEPS ou Action AV'],
     };
 
     const tabs = [];
@@ -1635,15 +1637,19 @@
 
     // Champs formule pour lesquels un aperçu en direct est possible (recopie simple
     // depuis une référence) : on branche leur mise à jour dès que la référence change.
-    // Le champ "Liste des enregistrements" du tableau combiné (s'il est configuré) est
-    // traité à part par setupCombinedTablePreview ci-dessous, pas par l'aperçu standard.
+    // Les champs "Liste des enregistrements" du tableau combiné (s'il est configuré, et
+    // qu'il apparaisse à un ou plusieurs endroits du formulaire) sont traités à part par
+    // setupCombinedTablePreview ci-dessous, pas par l'aperçu standard.
     const combinedTableCfg = currentOptions.combinedTable;
+    const combinedRecordsColIds = combinedTableCfg ? (combinedTableCfg.recordsCols || []) : [];
     included
-      .filter(col => col.isFormula && !(combinedTableCfg && col.colId === combinedTableCfg.recordsCol))
+      .filter(col => col.isFormula && !combinedRecordsColIds.includes(col.colId))
       .forEach(setupFormulaPreview);
     if (combinedTableCfg) {
-      const recordsField = included.find(c => c.colId === combinedTableCfg.recordsCol);
-      if (recordsField) setupCombinedTablePreview(recordsField, combinedTableCfg);
+      combinedRecordsColIds.forEach(colId => {
+        const recordsField = included.find(c => c.colId === colId);
+        if (recordsField) setupCombinedTablePreview(recordsField, combinedTableCfg);
+      });
     }
 
     // Les champs "parents" qui ne sont pas des combos (Texte, Numérique, Date, etc.)
@@ -1704,7 +1710,7 @@
     // chaque ligne d'origine, donc toujours alignés) est affiché. Pas de label ni de
     // commentaire ici : ce champ n'est qu'un emplacement technique, pas une donnée à nommer.
     const ct = currentOptions.combinedTable;
-    if (ct && col.colId === ct.recordsCol) {
+    if (ct && (ct.recordsCols || []).includes(col.colId)) {
       return `
         <div class="combined-table-wrap" id="${id}" data-combined-table="1">
           <span class="formula-preview-placeholder">Se remplit après sélection du champ lié</span>
