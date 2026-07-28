@@ -782,6 +782,23 @@
     return cols;
   }
 
+  // Retourne { type, visibleCol } pour une colonne précise d'une table quelconque du
+  // document — utilisé pour savoir si un champ affiché dans un tableau combiné (ex.
+  // "Porteur") est une Référence à résoudre en texte, ou une valeur simple à afficher
+  // telle quelle.
+  function getColumnDetail(tableId, colId) {
+    if (!docTablesMeta || !allDocColumns) return null;
+    const idx = docTablesMeta.tableId.indexOf(tableId);
+    if (idx === -1) return null;
+    const tableRef = docTablesMeta.id[idx];
+    for (let i = 0; i < allDocColumns.id.length; i++) {
+      if (allDocColumns.parentId[i] === tableRef && allDocColumns.colId[i] === colId) {
+        return { type: allDocColumns.type[i] || 'Text', visibleCol: allDocColumns.visibleCol[i] || 0 };
+      }
+    }
+    return null;
+  }
+
   // Construit les dépendances de filtrage en cascade à partir du réglage explicite choisi
   // par l'utilisateur dans le panneau ⚙️ (filterParentColId / filterLinkColId), et non plus
   // par une détection automatique silencieuse.
@@ -2254,20 +2271,38 @@
       }
       const data2 = refOptionsCache[targetTable2];
 
+      // Certains champs affichés (typiquement "Porteur", parfois "Nom") sont eux-mêmes
+      // des Références vers une autre table : on détecte leur type une seule fois ici
+      // pour résoudre leur valeur brute (un numéro de ligne) en texte affichable, au lieu
+      // du numéro brut.
+      const nameFieldDetail = cfg.nameField ? getColumnDetail(targetTable2, cfg.nameField) : null;
+      const porteurFieldDetail = cfg.porteurField ? getColumnDetail(targetTable2, cfg.porteurField) : null;
+      async function resolveDisplay(raw, detail) {
+        if (!detail || !detail.type || !(detail.type.startsWith('Ref:') || detail.type.startsWith('RefList:'))) return raw;
+        try {
+          return await resolveRefDisplayValue(raw, detail.type, detail.visibleCol);
+        } catch (err) {
+          console.error('Résolution de référence impossible :', err);
+          return raw;
+        }
+      }
+
       const group2Values = (cfg.group2Values || []).map(v => v.toLowerCase());
       const group1Rows = [];
       const group2Rows = [];
 
-      rowIds.forEach(rowId => {
+      for (const rowId of rowIds) {
         const idx2 = data2.id.indexOf(rowId);
-        if (idx2 === -1) return;
-        const nomRaw = (cfg.nameField && data2[cfg.nameField]) ? data2[cfg.nameField][idx2] : null;
-        if (isEmptyish(nomRaw)) return; // ligne sans nom : rien à afficher, on l'ignore
+        if (idx2 === -1) continue;
+        let nomRaw = (cfg.nameField && data2[cfg.nameField]) ? data2[cfg.nameField][idx2] : null;
+        nomRaw = await resolveDisplay(nomRaw, nameFieldDetail);
+        if (isEmptyish(nomRaw)) continue; // ligne sans nom : rien à afficher, on l'ignore
         const nom = String(nomRaw).trim();
         const natureRaw = (cfg.natureField && data2[cfg.natureField]) ? data2[cfg.natureField][idx2] : null;
         const avancementRaw = (cfg.avancementField && data2[cfg.avancementField]) ? data2[cfg.avancementField][idx2] : null;
         const commentRaw = (cfg.commentField && data2[cfg.commentField]) ? data2[cfg.commentField][idx2] : null;
-        const porteurRaw = (cfg.porteurField && data2[cfg.porteurField]) ? data2[cfg.porteurField][idx2] : null;
+        let porteurRaw = (cfg.porteurField && data2[cfg.porteurField]) ? data2[cfg.porteurField][idx2] : null;
+        porteurRaw = await resolveDisplay(porteurRaw, porteurFieldDetail);
 
         const nature = isEmptyish(natureRaw) ? '' : String(natureRaw).trim();
         // Détection MEO : d'après la valeur de Nature si disponible (uniquement si ce
@@ -2290,7 +2325,7 @@
         } else {
           group1Rows.push(row);
         }
-      });
+      }
       group2Rows.sort((a, b) => a.meoNum - b.meoNum);
 
       el.innerHTML = renderGroup(cfg.group1Label, group1Rows) + renderGroup(cfg.group2Label, group2Rows);
