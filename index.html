@@ -916,6 +916,7 @@
         order: (saved && typeof saved.order === 'number') ? saved.order : idx,
         filterParentColId: isRef ? filterParentColId : null,
         filterLinkColId: isRef ? filterLinkColId : null,
+        requireParentValue: isRef ? (saved ? !!saved.requireParentValue : false) : false,
         alignWithNext: saved ? !!saved.alignWithNext : false,
       };
     });
@@ -1347,6 +1348,10 @@
           <option value="">— Colonne de liaison dans ${escapeHtml(targetTable)} —</option>
           ${linkOptions}
         </select>
+        <label style="display:flex;align-items:center;gap:6px;font-weight:400;font-size:12px;margin-top:4px;">
+          <input type="checkbox" class="cfg-filter-require" ${c.requireParentValue ? 'checked' : ''} />
+          N'afficher aucune option tant que le champ parent n'est pas rempli (au lieu de tout montrer)
+        </label>
       </div>`;
   }
 
@@ -1423,6 +1428,7 @@
       const newConfig = Array.from(rows).map(row => {
         const filterParentSel = row.querySelector('.cfg-filter-parent');
         const filterLinkSel = row.querySelector('.cfg-filter-link');
+        const filterRequireEl = row.querySelector('.cfg-filter-require');
         return {
           colId: row.dataset.col,
           included: row.querySelector('.cfg-included').checked,
@@ -1432,6 +1438,7 @@
           order: parseInt(row.querySelector('.cfg-order').value, 10) || 0,
           filterParentColId: filterParentSel ? (filterParentSel.value || null) : null,
           filterLinkColId: filterLinkSel ? (filterLinkSel.value || null) : null,
+          requireParentValue: filterRequireEl ? filterRequireEl.checked : false,
           alignWithNext: row.querySelector('.cfg-align-next').checked,
         };
       });
@@ -2307,17 +2314,21 @@
 
     comboState[colId] = isList ? [] : null;
 
-    // Sous-ensemble des options actuellement disponibles compte tenu du champ parent
-    // (si le parent n'a pas encore de valeur, on montre tout, sans filtrer). Si ce champ
-    // doit se limiter aux libellés contenant "MEO", on applique ce filtre en plus — mais
-    // seulement s'il reste au moins une option après filtrage : sinon (aucune action ne
-    // contient "MEO" pour ce projet), on retombe sur la liste complète plutôt que de
-    // laisser le champ vide.
+    // Sous-ensemble des options actuellement disponibles compte tenu du champ parent. Par
+    // défaut, si le parent n'a pas encore de valeur, on montre tout, sans filtrer — sauf
+    // si ce champ est configuré avec "requireParentValue" (⚙️ → filtre en cascade), auquel
+    // cas on n'affiche RIEN tant que le parent n'est pas rempli. Si ce champ doit aussi se
+    // limiter aux libellés contenant "MEO", on applique ce filtre en plus — mais seulement
+    // s'il reste au moins une option après filtrage : sinon (aucune action ne contient
+    // "MEO" pour ce projet), on retombe sur la liste complète plutôt que de laisser le
+    // champ vide.
     function getAvailableOptions() {
       let avail = options;
       if (dep) {
         const parentValue = getFieldRawValue(dep.parentColId);
-        if (parentValue !== null && parentValue !== undefined && parentValue !== '') {
+        if (parentValue === null || parentValue === undefined || parentValue === '') {
+          avail = col.requireParentValue ? [] : avail;
+        } else {
           avail = avail.filter(o => o.filterRaw !== undefined && o.filterRaw !== null && String(o.filterRaw) === String(parentValue));
         }
       }
@@ -2386,7 +2397,10 @@
       );
       if (!filtered.length) {
         const parentValue = dep ? getFieldRawValue(dep.parentColId) : null;
-        if (dep && parentValue !== null && parentValue !== undefined && parentValue !== '') {
+        const parentEmpty = parentValue === null || parentValue === undefined || parentValue === '';
+        if (dep && col.requireParentValue && parentEmpty) {
+          listEl.innerHTML = '<div class="combo-empty">Sélectionnez d\'abord le champ précédent.</div>';
+        } else if (dep && !parentEmpty) {
           const withLink = options.filter(o => o.filterRaw !== undefined && o.filterRaw !== null).length;
           listEl.innerHTML = `<div class="combo-empty">Aucune ligne liée à ce choix.<br>Diagnostic : valeur comparée = "${escapeHtml(String(parentValue))}" · ${withLink} ligne(s) sur ${options.length} ont une colonne de liaison renseignée dans ${escapeHtml(dep.targetTable)}.</div>`;
         } else {
