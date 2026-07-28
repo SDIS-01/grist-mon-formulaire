@@ -1871,6 +1871,18 @@
   //   (ex. "Projet 1, Projet 2, Projet 3").
   // Dans les deux cas, si plusieurs éléments sont trouvés, chacun s'affiche sur sa
   // propre ligne au lieu d'un texte continu, pour rester lisible.
+  // Détecte une valeur "vide" au sens large : null/undefined JS, chaîne vide, ou texte
+  // qui représente une absence de valeur ("None", "null", "NaN"...) tel que renvoyé par
+  // certaines formules Grist une fois converties en texte. Utilisé pour ne jamais
+  // afficher ces valeurs telles quelles à l'écran.
+  function isEmptyish(v) {
+    if (v === null || v === undefined) return true;
+    const s = String(v).trim();
+    if (s === '') return true;
+    const low = s.toLowerCase();
+    return low === 'none' || low === 'null' || low === 'nan' || low === 'undefined';
+  }
+
   function renderFormulaPreviewHtml(raw, type, widgetOptionsStr, placeholder, meoFilter) {
     if (raw === null || raw === undefined || raw === '') {
       return `<span class="formula-preview-placeholder">${escapeHtml(placeholder)}</span>`;
@@ -1886,9 +1898,9 @@
     if (Array.isArray(raw)) {
       // Marqueur de liste Grist : ["L", v1, v2, ...] -> on retire le "L" de tête.
       const values = (raw[0] === 'L') ? raw.slice(1) : raw;
-      items = values.map(v => String(v).trim()).filter(v => v !== '');
+      items = values.map(v => String(v).trim()).filter(v => !isEmptyish(v));
     } else {
-      items = String(raw).split(',').map(s => s.trim()).filter(s => s !== '');
+      items = String(raw).split(',').map(s => s.trim()).filter(s => !isEmptyish(s));
     }
     if (meoFilter) {
       items = items.filter(it => it.toLowerCase().includes('meo'));
@@ -2031,6 +2043,18 @@
     return values.map(v => (v === null || v === undefined) ? '' : String(v).trim());
   }
 
+  // Formate une valeur d'avancement en pourcentage lisible ("0.791666..." -> "79 %").
+  // Si la valeur contient déjà un "%" ou n'est pas un nombre, elle est renvoyée telle quelle
+  // (vide si elle représente une absence de valeur).
+  function formatMaybePercent(raw) {
+    if (isEmptyish(raw)) return '';
+    const s = String(raw).trim();
+    if (s.includes('%')) return s;
+    const num = Number(s);
+    if (!Number.isNaN(num)) return Math.round(num * 100) + ' %';
+    return s;
+  }
+
   // Branche et affiche le "tableau combiné" : recombine 4 colonnes formule liste
   // (Nom, Nature, Avancement, Commentaire), toutes issues du même lookupRecords, en un
   // tableau ligne à ligne, réparti en 2 groupes selon la valeur de Nature.
@@ -2083,7 +2107,8 @@
       const avancements = avancementInfo ? normalizeListRaw(data[avancementInfo.subColId] ? data[avancementInfo.subColId][idx] : null) : [];
       const commentaires = commentInfo ? normalizeListRaw(data[commentInfo.subColId] ? data[commentInfo.subColId][idx] : null) : [];
 
-      if (!noms.length) {
+      const validNoms = noms.filter(n => !isEmptyish(n));
+      if (!validNoms.length) {
         el.innerHTML = '<span class="formula-preview-placeholder">Aucun élément</span>';
         return;
       }
@@ -2092,11 +2117,26 @@
       const group1Rows = [];
       const group2Rows = [];
       noms.forEach((nom, i) => {
-        const row = { nom, avancement: avancements[i] || '', commentaire: commentaires[i] || '' };
+        if (isEmptyish(nom)) return; // ligne sans nom : rien à afficher, on l'ignore
+        const row = {
+          nom,
+          avancement: formatMaybePercent(avancements[i]),
+          commentaire: isEmptyish(commentaires[i]) ? '' : commentaires[i],
+        };
+        // Détection MEO : d'après la valeur de Nature si disponible, ou à défaut d'après
+        // le nom lui-même (motif "..._MEO<numéro>_...", ex. "2024_02_P_MEO1_..."), qui
+        // sert aussi à extraire le numéro pour trier les actions MEO dans l'ordre.
         const nature = (natures[i] || '').toLowerCase();
-        if (group2Values.includes(nature)) group2Rows.push(row);
-        else group1Rows.push(row);
+        const meoMatch = nom.match(/_MEO(\d+)_/i);
+        const isMeo = (nature && group2Values.some(v => v && nature.includes(v))) || !!meoMatch;
+        if (isMeo) {
+          row.meoNum = meoMatch ? parseInt(meoMatch[1], 10) : Infinity;
+          group2Rows.push(row);
+        } else {
+          group1Rows.push(row);
+        }
       });
+      group2Rows.sort((a, b) => a.meoNum - b.meoNum);
 
       el.innerHTML = renderGroup(cfg.group1Label, group1Rows) + renderGroup(cfg.group2Label, group2Rows);
     };
