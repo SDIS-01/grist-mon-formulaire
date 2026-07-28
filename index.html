@@ -516,24 +516,10 @@
       </div>
     </div>
     <div class="cfg-block">
-      <label>📊 Tableau combiné (regroupe une liste de références en un tableau, réparti par nature)</label>
-      <div class="cfg-col-name" style="margin-bottom:8px;">Choisissez la colonne formule qui donne la liste des enregistrements liés (type RefList), puis les 4 champs à afficher, lus directement sur chaque ligne d'origine — garantit qu'ils restent alignés. Laissez "— Aucune —" sur la 1ère liste pour désactiver.</div>
-      <label for="cfgCombRecordsCol" style="margin-top:6px;">Colonne(s) "Liste des enregistrements" (RefList) — Ctrl/Cmd+clic pour en choisir plusieurs, si le même tableau doit apparaître à plusieurs endroits du formulaire</label>
-      <select id="cfgCombRecordsCol" multiple size="4"></select>
-      <label for="cfgCombNameField" style="margin-top:6px;">Champ "Nom" (sur la table d'origine)</label>
-      <select id="cfgCombNameField"></select>
-      <label for="cfgCombNatureField" style="margin-top:6px;">Champ "Nature" (sert à répartir en 2 groupes)</label>
-      <select id="cfgCombNatureField"></select>
-      <label for="cfgCombAvancementField" style="margin-top:6px;">Champ "Avancement"</label>
-      <select id="cfgCombAvancementField"></select>
-      <label for="cfgCombCommentField" style="margin-top:6px;">Champ "Commentaire"</label>
-      <select id="cfgCombCommentField"></select>
-      <label for="cfgCombGroup2Values" style="margin-top:6px;">Valeur(s) de Nature pour le 2ᵉ groupe (séparées par virgule, ex. MEO)</label>
-      <input type="text" id="cfgCombGroup2Values" placeholder="MEO" />
-      <label for="cfgCombGroup1Label" style="margin-top:6px;">Titre du 1er groupe (tout le reste)</label>
-      <input type="text" id="cfgCombGroup1Label" placeholder="Projets / actions AV" />
-      <label for="cfgCombGroup2Label" style="margin-top:6px;">Titre du 2ᵉ groupe</label>
-      <input type="text" id="cfgCombGroup2Label" placeholder="Actions MEO" />
+      <label>📊 Tableaux combinés (regroupent une liste de références en un tableau)</label>
+      <div class="cfg-col-name" style="margin-bottom:8px;">Chaque bloc ci-dessous définit un tableau indépendant : colonne "Liste des enregistrements" (RefList), puis les champs à afficher, lus directement sur chaque ligne d'origine — garantit qu'ils restent alignés. Le champ "Nature" est facultatif : laissez-le sur "— Aucun —" si vous ne voulez qu'un seul tableau sans répartition en 2 groupes.</div>
+      <div id="cfgCombinedTablesList"></div>
+      <button type="button" class="secondary" id="cfgAddCombinedTable">➕ Ajouter un tableau combiné</button>
     </div>
     <div class="subtitle">Cochez les champs à afficher, renommez-les si besoin, marquez-les obligatoires et fixez leur ordre. Les colonnes formule sont affichées en lecture seule (grisées) dans le formulaire.</div>
     <div style="margin-bottom:10px;">
@@ -672,7 +658,7 @@
   document.getElementById('cfgAddSection').addEventListener('click', addSection);
   document.getElementById('cfgAddSubsection').addEventListener('click', addSubsection);
   document.getElementById('cfgAddLink').addEventListener('click', addExternalLink);
-  document.getElementById('cfgCombRecordsCol').addEventListener('change', () => refreshCombinedFieldSelects());
+  document.getElementById('cfgAddCombinedTable').addEventListener('click', addCombinedTableConfigBlock);
 
   async function bootstrap() {
     allTableIds = await grist.docApi.listTables();
@@ -936,6 +922,18 @@
 
   // ---------- Config panel ----------
 
+  // Retourne la liste des tableaux combinés configurés (nouveau réglage à plusieurs
+  // tableaux, avec repli sur l'ancien réglage à un seul tableau si c'est tout ce qui
+  // existe encore). Utilisé partout où le formulaire a besoin de la config actuelle.
+  function getCombinedTablesConfig() {
+    if (Array.isArray(currentOptions.combinedTables)) return currentOptions.combinedTables;
+    if (currentOptions.combinedTable) {
+      const old = currentOptions.combinedTable;
+      return [{ ...old, recordsCols: old.recordsCols || (old.recordsCol ? [old.recordsCol] : []) }];
+    }
+    return [];
+  }
+
   function showConfig() {
     if (!allTableIds.length) return; // pas encore prêt
     document.getElementById('formView').style.display = 'none';
@@ -949,48 +947,113 @@
     document.getElementById('cfgFormSubtitle').value = currentOptions.formSubtitle || '';
     document.getElementById('cfgAttachFormUrl').value = currentOptions.attachFormUrl || '';
 
-    populateCombinedTableConfig();
+    // État de travail (en mémoire, pas encore enregistré) pour la liste des tableaux
+    // combinés : part de la config actuelle (migrée si besoin depuis l'ancien réglage).
+    combinedTablesDraft = getCombinedTablesConfig().map(t => ({ ...t }));
+    renderCombinedTablesConfig();
+
     renderConfigList();
   }
 
-  // Remplit la liste déroulante "Liste des enregistrements" avec les colonnes formule de
-  // type RefList disponibles, restaure la valeur enregistrée, puis peuple les 4 champs
-  // (Nom/Nature/Avancement/Commentaire) en fonction de la table ciblée par ce choix.
-  function populateCombinedTableConfig() {
-    const ct = currentOptions.combinedTable || {};
-    const savedRecordsCols = ct.recordsCols || (ct.recordsCol ? [ct.recordsCol] : []); // compat anciennes config à 1 seule colonne
-    const refListCols = mergedConfig.filter(c => c.isFormula && c.type.startsWith('RefList:'));
-    const options = refListCols
-      .map(c => `<option value="${c.colId}"${savedRecordsCols.includes(c.colId) ? ' selected' : ''}>${escapeHtml(c.label)} (${c.colId})</option>`)
-      .join('');
-    document.getElementById('cfgCombRecordsCol').innerHTML = options;
+  // Liste de travail des tableaux combinés affichés dans le panneau ⚙️ (un par bloc).
+  let combinedTablesDraft = [];
 
-    refreshCombinedFieldSelects(ct.nameField, ct.natureField, ct.avancementField, ct.commentField);
-
-    document.getElementById('cfgCombGroup2Values').value = (ct.group2Values || []).join(', ');
-    document.getElementById('cfgCombGroup1Label').value = ct.group1Label || '';
-    document.getElementById('cfgCombGroup2Label').value = ct.group2Label || '';
+  function addCombinedTableConfigBlock() {
+    syncCombinedTablesDraftFromDOM();
+    combinedTablesDraft.push({
+      recordsCols: [], nameField: null, natureField: null, avancementField: null, commentField: null,
+      group2Values: [], group1Label: '', group2Label: '',
+    });
+    renderCombinedTablesConfig();
   }
 
-  // Peuple les 4 sélecteurs de champs à partir des colonnes de la table ciblée par la
-  // 1ère colonne "Liste des enregistrements" actuellement choisie (les autres, si
-  // plusieurs, doivent pointer vers la même table source). Appelé à l'ouverture du
-  // panneau et à chaque changement de ce choix.
-  function refreshCombinedFieldSelects(preselectName, preselectNature, preselectAvancement, preselectComment) {
-    const selected = Array.from(document.getElementById('cfgCombRecordsCol').selectedOptions).map(o => o.value);
+  // Redessine tous les blocs de tableaux combinés à partir de combinedTablesDraft.
+  // IMPORTANT : ne relit jamais le DOM ici (ça se ferait avec des identifiants
+  // d'index déjà décalés après un ajout/suppression) — c'est aux appelants de
+  // synchroniser combinedTablesDraft depuis le DOM avant de modifier le tableau,
+  // puis d'appeler cette fonction pour un rendu propre.
+  function renderCombinedTablesConfig() {
+    const list = document.getElementById('cfgCombinedTablesList');
+    list.innerHTML = combinedTablesDraft.map((ct, idx) => `
+      <div class="cfg-block" data-ct-idx="${idx}" style="background:#f8fafc;">
+        <div style="display:flex;justify-content:space-between;align-items:center;">
+          <label style="margin-bottom:0;">Tableau combiné n°${idx + 1}</label>
+          <button type="button" class="secondary cfg-ct-delete" data-idx="${idx}" title="Supprimer ce tableau">🗑️</button>
+        </div>
+        <label for="cfgCombRecordsCol_${idx}" style="margin-top:6px;">Colonne(s) "Liste des enregistrements" (RefList) — Ctrl/Cmd+clic pour en choisir plusieurs, si ce tableau doit apparaître à plusieurs endroits</label>
+        <select id="cfgCombRecordsCol_${idx}" class="cfg-ct-records" data-idx="${idx}" multiple size="4"></select>
+        <label for="cfgCombNameField_${idx}" style="margin-top:6px;">Champ "Nom" (sur la table d'origine)</label>
+        <select id="cfgCombNameField_${idx}"></select>
+        <label for="cfgCombNatureField_${idx}" style="margin-top:6px;">Champ "Nature" (facultatif — sert à répartir en 2 groupes ; laisser "— Aucun —" pour un tableau simple)</label>
+        <select id="cfgCombNatureField_${idx}"></select>
+        <label for="cfgCombAvancementField_${idx}" style="margin-top:6px;">Champ "Avancement"</label>
+        <select id="cfgCombAvancementField_${idx}"></select>
+        <label for="cfgCombCommentField_${idx}" style="margin-top:6px;">Champ "Commentaire"</label>
+        <select id="cfgCombCommentField_${idx}"></select>
+        <label for="cfgCombGroup2Values_${idx}" style="margin-top:6px;">Valeur(s) de Nature pour le 2ᵉ groupe (séparées par virgule, ex. MEO)</label>
+        <input type="text" id="cfgCombGroup2Values_${idx}" placeholder="MEO" value="${escapeHtml((ct.group2Values || []).join(', '))}" />
+        <label for="cfgCombGroup1Label_${idx}" style="margin-top:6px;">Titre du 1er groupe (tout le reste, ou titre unique si pas de 2ᵉ groupe)</label>
+        <input type="text" id="cfgCombGroup1Label_${idx}" placeholder="Projets / actions AV" value="${escapeHtml(ct.group1Label || '')}" />
+        <label for="cfgCombGroup2Label_${idx}" style="margin-top:6px;">Titre du 2ᵉ groupe</label>
+        <input type="text" id="cfgCombGroup2Label_${idx}" placeholder="Actions MEO" value="${escapeHtml(ct.group2Label || '')}" />
+      </div>
+    `).join('');
+
+    combinedTablesDraft.forEach((ct, idx) => {
+      const refListCols = mergedConfig.filter(c => c.isFormula && c.type.startsWith('RefList:'));
+      document.getElementById(`cfgCombRecordsCol_${idx}`).innerHTML = refListCols
+        .map(c => `<option value="${c.colId}"${(ct.recordsCols || []).includes(c.colId) ? ' selected' : ''}>${escapeHtml(c.label)} (${c.colId})</option>`)
+        .join('');
+      refreshCombinedFieldSelects(idx, ct.nameField, ct.natureField, ct.avancementField, ct.commentField);
+    });
+
+    list.querySelectorAll('.cfg-ct-delete').forEach(btn => {
+      btn.addEventListener('click', () => {
+        syncCombinedTablesDraftFromDOM();
+        combinedTablesDraft.splice(parseInt(btn.dataset.idx, 10), 1);
+        renderCombinedTablesConfig();
+      });
+    });
+    list.querySelectorAll('.cfg-ct-records').forEach(sel => {
+      sel.addEventListener('change', () => refreshCombinedFieldSelects(parseInt(sel.dataset.idx, 10)));
+    });
+  }
+
+  // Peuple les 4 sélecteurs de champs d'un bloc donné à partir des colonnes de la table
+  // ciblée par sa 1ère colonne "Liste des enregistrements" choisie.
+  function refreshCombinedFieldSelects(idx, preselectName, preselectNature, preselectAvancement, preselectComment) {
+    const selected = Array.from(document.getElementById(`cfgCombRecordsCol_${idx}`).selectedOptions).map(o => o.value);
     const recordsField = mergedConfig.find(c => c.colId === selected[0]);
     const targetCols = recordsField ? getColumnsMetaForTable(recordsField.type.split(':')[1]) : [];
     const fieldOptions = ['<option value="">— Aucun —</option>']
       .concat(targetCols.map(tc => `<option value="${tc.colId}">${escapeHtml(tc.label)} (${tc.colId})</option>`))
       .join('');
-    document.getElementById('cfgCombNameField').innerHTML = fieldOptions;
-    document.getElementById('cfgCombNatureField').innerHTML = fieldOptions;
-    document.getElementById('cfgCombAvancementField').innerHTML = fieldOptions;
-    document.getElementById('cfgCombCommentField').innerHTML = fieldOptions;
-    document.getElementById('cfgCombNameField').value = preselectName || '';
-    document.getElementById('cfgCombNatureField').value = preselectNature || '';
-    document.getElementById('cfgCombAvancementField').value = preselectAvancement || '';
-    document.getElementById('cfgCombCommentField').value = preselectComment || '';
+    document.getElementById(`cfgCombNameField_${idx}`).innerHTML = fieldOptions;
+    document.getElementById(`cfgCombNatureField_${idx}`).innerHTML = fieldOptions;
+    document.getElementById(`cfgCombAvancementField_${idx}`).innerHTML = fieldOptions;
+    document.getElementById(`cfgCombCommentField_${idx}`).innerHTML = fieldOptions;
+    document.getElementById(`cfgCombNameField_${idx}`).value = preselectName || '';
+    document.getElementById(`cfgCombNatureField_${idx}`).value = preselectNature || '';
+    document.getElementById(`cfgCombAvancementField_${idx}`).value = preselectAvancement || '';
+    document.getElementById(`cfgCombCommentField_${idx}`).value = preselectComment || '';
+  }
+
+  // Relit les valeurs actuellement affichées dans le DOM (si des blocs existent déjà)
+  // et les reporte dans combinedTablesDraft, pour ne pas perdre de saisie en cours
+  // lors d'un ajout/suppression de bloc qui redessine toute la liste.
+  function syncCombinedTablesDraftFromDOM() {
+    combinedTablesDraft.forEach((ct, idx) => {
+      const recordsSel = document.getElementById(`cfgCombRecordsCol_${idx}`);
+      if (!recordsSel) return; // bloc pas encore rendu (ex. juste ajouté) : rien à relire
+      ct.recordsCols = Array.from(recordsSel.selectedOptions).map(o => o.value);
+      ct.nameField = document.getElementById(`cfgCombNameField_${idx}`).value || null;
+      ct.natureField = document.getElementById(`cfgCombNatureField_${idx}`).value || null;
+      ct.avancementField = document.getElementById(`cfgCombAvancementField_${idx}`).value || null;
+      ct.commentField = document.getElementById(`cfgCombCommentField_${idx}`).value || null;
+      ct.group2Values = document.getElementById(`cfgCombGroup2Values_${idx}`).value.split(',').map(s => s.trim()).filter(Boolean);
+      ct.group1Label = document.getElementById(`cfgCombGroup1Label_${idx}`).value.trim();
+      ct.group2Label = document.getElementById(`cfgCombGroup2Label_${idx}`).value.trim();
+    });
   }
 
   function hideConfig() {
@@ -1297,19 +1360,23 @@
     await grist.setOption('attachFormUrl', attachFormUrl || null);
     currentOptions.attachFormUrl = attachFormUrl || null;
 
-    const combRecordsCols = Array.from(document.getElementById('cfgCombRecordsCol').selectedOptions).map(o => o.value);
-    const combinedTable = combRecordsCols.length ? {
-      recordsCols: combRecordsCols,
-      nameField: document.getElementById('cfgCombNameField').value || null,
-      natureField: document.getElementById('cfgCombNatureField').value || null,
-      avancementField: document.getElementById('cfgCombAvancementField').value || null,
-      commentField: document.getElementById('cfgCombCommentField').value || null,
-      group2Values: document.getElementById('cfgCombGroup2Values').value.split(',').map(s => s.trim()).filter(Boolean),
-      group1Label: document.getElementById('cfgCombGroup1Label').value.trim() || 'Groupe 1',
-      group2Label: document.getElementById('cfgCombGroup2Label').value.trim() || 'Groupe 2',
-    } : null;
-    await grist.setOption('combinedTable', combinedTable);
-    currentOptions.combinedTable = combinedTable;
+    syncCombinedTablesDraftFromDOM();
+    const combinedTables = combinedTablesDraft
+      .filter(ct => (ct.recordsCols || []).length)
+      .map(ct => ({
+        recordsCols: ct.recordsCols,
+        nameField: ct.nameField || null,
+        natureField: ct.natureField || null,
+        avancementField: ct.avancementField || null,
+        commentField: ct.commentField || null,
+        group2Values: ct.group2Values || [],
+        group1Label: ct.group1Label || 'Groupe 1',
+        group2Label: ct.group2Label || 'Groupe 2',
+      }));
+    await grist.setOption('combinedTables', combinedTables);
+    await grist.setOption('combinedTable', null); // ancien réglage à 1 seul tableau, remplacé par la liste ci-dessus
+    currentOptions.combinedTables = combinedTables;
+    currentOptions.combinedTable = null;
 
     // Liste de liens externes : lue depuis les lignes du panneau (liste unifiée avec les
     // champs/chapitres), puis sauvegardée. On efface aussi les anciens champs fixes
@@ -1637,20 +1704,20 @@
 
     // Champs formule pour lesquels un aperçu en direct est possible (recopie simple
     // depuis une référence) : on branche leur mise à jour dès que la référence change.
-    // Les champs "Liste des enregistrements" du tableau combiné (s'il est configuré, et
-    // qu'il apparaisse à un ou plusieurs endroits du formulaire) sont traités à part par
-    // setupCombinedTablePreview ci-dessous, pas par l'aperçu standard.
-    const combinedTableCfg = currentOptions.combinedTable;
-    const combinedRecordsColIds = combinedTableCfg ? (combinedTableCfg.recordsCols || []) : [];
+    // Les champs "Liste des enregistrements" de chaque tableau combiné configuré (il
+    // peut y en avoir plusieurs, chacun apparaissant à un ou plusieurs endroits) sont
+    // traités à part par setupCombinedTablePreview ci-dessous, pas par l'aperçu standard.
+    const combinedTablesCfg = getCombinedTablesConfig();
+    const combinedRecordsColIds = combinedTablesCfg.flatMap(ct => ct.recordsCols || []);
     included
       .filter(col => col.isFormula && !combinedRecordsColIds.includes(col.colId))
       .forEach(setupFormulaPreview);
-    if (combinedTableCfg) {
-      combinedRecordsColIds.forEach(colId => {
+    combinedTablesCfg.forEach(ct => {
+      (ct.recordsCols || []).forEach(colId => {
         const recordsField = included.find(c => c.colId === colId);
-        if (recordsField) setupCombinedTablePreview(recordsField, combinedTableCfg);
+        if (recordsField) setupCombinedTablePreview(recordsField, ct);
       });
-    }
+    });
 
     // Les champs "parents" qui ne sont pas des combos (Texte, Numérique, Date, etc.)
     // doivent aussi déclencher le rafraîchissement de leurs champs enfants.
@@ -1709,8 +1776,8 @@
     // le tableau regroupant Nom/Nature/Avancement/Commentaire (lus directement sur
     // chaque ligne d'origine, donc toujours alignés) est affiché. Pas de label ni de
     // commentaire ici : ce champ n'est qu'un emplacement technique, pas une donnée à nommer.
-    const ct = currentOptions.combinedTable;
-    if (ct && (ct.recordsCols || []).includes(col.colId)) {
+    const isCombinedTableSlot = getCombinedTablesConfig().some(ct => (ct.recordsCols || []).includes(col.colId));
+    if (isCombinedTableSlot) {
       return `
         <div class="combined-table-wrap" id="${id}" data-combined-table="1">
           <span class="formula-preview-placeholder">Se remplit après sélection du champ lié</span>
