@@ -2075,6 +2075,7 @@
       const rowsHtml = rows.map(r => `
         <tr>
           <td>${escapeHtml(r.nom)}</td>
+          <td>${escapeHtml(r.nature)}</td>
           <td class="ct-col-avancement">${escapeHtml(r.avancement)}</td>
           <td>${escapeHtml(r.commentaire)}</td>
         </tr>`).join('');
@@ -2082,7 +2083,7 @@
         <div class="combined-table-group">
           <h4>${escapeHtml(title)}</h4>
           <table class="combined-table">
-            <thead><tr><th>Nom</th><th>Avancement</th><th>Commentaire</th></tr></thead>
+            <thead><tr><th>Nom</th><th>Nature</th><th>Avancement</th><th>Commentaire</th></tr></thead>
             <tbody>${rowsHtml}</tbody>
           </table>
         </div>`;
@@ -2118,16 +2119,17 @@
       const group2Rows = [];
       noms.forEach((nom, i) => {
         if (isEmptyish(nom)) return; // ligne sans nom : rien à afficher, on l'ignore
+        const nature = (natures[i] || '').toLowerCase();
+        const meoMatch = nom.match(/_MEO(\d+)_/i);
         const row = {
           nom,
+          nature: isEmptyish(natures[i]) ? (meoMatch ? 'MEO' : '') : natures[i],
           avancement: formatMaybePercent(avancements[i]),
           commentaire: isEmptyish(commentaires[i]) ? '' : commentaires[i],
         };
         // Détection MEO : d'après la valeur de Nature si disponible, ou à défaut d'après
         // le nom lui-même (motif "..._MEO<numéro>_...", ex. "2024_02_P_MEO1_..."), qui
         // sert aussi à extraire le numéro pour trier les actions MEO dans l'ordre.
-        const nature = (natures[i] || '').toLowerCase();
-        const meoMatch = nom.match(/_MEO(\d+)_/i);
         const isMeo = (nature && group2Values.some(v => v && nature.includes(v))) || !!meoMatch;
         if (isMeo) {
           row.meoNum = meoMatch ? parseInt(meoMatch[1], 10) : Infinity;
