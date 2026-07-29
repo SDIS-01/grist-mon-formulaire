@@ -122,6 +122,17 @@
   .combined-table td { padding: 6px 8px; border: 1px solid var(--border); vertical-align: top; }
   .combined-table td.ct-col-avancement { white-space: nowrap; }
   .attachment-list { display: flex; flex-direction: column; gap: 8px; }
+  /* Regroupement des pièces jointes par action d'origine : un intitulé au-dessus
+     de chaque groupe indique à quelle action la ou les pièces appartiennent. */
+  .attachment-group { display: flex; flex-direction: column; gap: 6px; }
+  .attachment-group + .attachment-group { margin-top: 12px; }
+  .attachment-owner {
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--muted, #64748b);
+    text-transform: none;
+    overflow-wrap: anywhere;
+  }
   .attachment-item {
     display: flex; align-items: center; gap: 8px;
     font-size: 13px; color: var(--text);
@@ -1497,6 +1508,7 @@
     hideMsg();
     comboState = {};
     comboOptionsCache = {};
+    attachmentOwnerMapCache = null; // la provenance des pièces jointes est recalculée à chaque rendu
 
     const included = config.filter(c => c.included).sort((a, b) => a.order - b.order);
 
@@ -2089,9 +2101,92 @@
     return downloadTokenInfo;
   }
 
+  // ---------- Provenance des pièces jointes (à quelle action appartiennent-elles) ----------
+
+  let attachmentOwnerMapCache = null; // identifiant de pièce jointe -> nom de l'action d'origine
+
+  // Liste les colonnes de type "Pièce(s) jointe(s)" d'une table quelconque du document.
+  function getAttachmentColIdsForTable(tableId) {
+    if (!docTablesMeta || !allDocColumns) return [];
+    const idx = docTablesMeta.tableId.indexOf(tableId);
+    if (idx === -1) return [];
+    const tableRef = docTablesMeta.id[idx];
+    const ids = [];
+    for (let i = 0; i < allDocColumns.id.length; i++) {
+      if (allDocColumns.parentId[i] === tableRef && (allDocColumns.type[i] || '') === 'Attachments') {
+        ids.push(allDocColumns.colId[i]);
+      }
+    }
+    return ids;
+  }
+
+  // Construit la correspondance "identifiant de pièce jointe -> nom de l'action".
+  // On réutilise les tableaux combinés déjà configurés dans le panneau ⚙️ : chacun désigne
+  // une table d'actions et la colonne qui sert de nom. Toutes les colonnes Pièce(s)
+  // jointe(s) de ces tables sont parcourues, ce qui permet de retrouver l'action d'origine
+  // de chaque fichier agrégé dans le champ formule "Pièce Jointe" du formulaire.
+  async function getAttachmentOwnerMap() {
+    if (attachmentOwnerMapCache) return attachmentOwnerMapCache;
+    const map = new Map();
+    const seen = new Set();
+
+    for (const cfg of getCombinedTablesConfig()) {
+      if (!cfg || !cfg.nameField) continue;
+      for (const recColId of (cfg.recordsCols || [])) {
+        const recCol = mergedConfig.find(c => c.colId === recColId);
+        if (!recCol || !recCol.type || !recCol.type.startsWith('RefList:')) continue;
+        const tableId = recCol.type.split(':')[1];
+        const key = tableId + '|' + cfg.nameField;
+        if (seen.has(key)) continue;
+        seen.add(key);
+
+        const attachCols = getAttachmentColIdsForTable(tableId);
+        if (!attachCols.length) continue;
+
+        if (!refOptionsCache[tableId]) {
+          try {
+            refOptionsCache[tableId] = await grist.docApi.fetchTable(tableId);
+          } catch (err) {
+            console.error('Impossible de charger la table', tableId, err);
+            continue;
+          }
+        }
+        const data = refOptionsCache[tableId];
+        if (!data || !data.id) continue;
+
+        const nameDetail = getColumnDetail(tableId, cfg.nameField);
+        const nameIsRef = !!(nameDetail && nameDetail.type &&
+          (nameDetail.type.startsWith('Ref:') || nameDetail.type.startsWith('RefList:')));
+
+        for (let i = 0; i < data.id.length; i++) {
+          const attachIds = attachCols.reduce((acc, colId) => {
+            return acc.concat(normalizeRefListRaw(data[colId] ? data[colId][i] : null));
+          }, []);
+          if (!attachIds.length) continue;
+
+          let nomRaw = data[cfg.nameField] ? data[cfg.nameField][i] : null;
+          if (nameIsRef) {
+            try {
+              nomRaw = await resolveRefDisplayValue(nomRaw, nameDetail.type, nameDetail.visibleCol);
+            } catch (err) {
+              console.error('Résolution du nom de l’action impossible :', err);
+            }
+          }
+          if (isEmptyish(nomRaw)) continue;
+          const nom = String(nomRaw).trim();
+          attachIds.forEach(id => { if (!map.has(id)) map.set(id, nom); });
+        }
+      }
+    }
+
+    attachmentOwnerMapCache = map;
+    return map;
+  }
+
   // Construit l'affichage (vignette pour les images, sinon lien) pour une valeur brute
   // de colonne Pièce(s) jointe(s) — gère le marqueur de liste Grist ["L", id1, id2, ...].
-  // Chaque pièce jointe reste téléchargeable en cliquant dessus.
+  // Les pièces sont regroupées par action d'origine, dont le nom est affiché juste
+  // au-dessus. Chaque pièce jointe reste téléchargeable en cliquant dessus.
   async function renderAttachmentLinks(raw) {
     const ids = Array.isArray(raw) ? (raw[0] === 'L' ? raw.slice(1) : raw) : (raw ? [raw] : []);
     const validIds = ids.filter(id => typeof id === 'number' && id > 0);
@@ -2100,7 +2195,15 @@
     const meta = await getAttachmentsMeta();
     const tok = await getDownloadTokenInfo();
 
-    return '<div class="attachment-list">' + validIds.map(id => {
+    let ownerMap = new Map();
+    try {
+      ownerMap = await getAttachmentOwnerMap();
+    } catch (err) {
+      // La provenance est un confort d'affichage : en cas d'échec, on garde la liste simple.
+      console.error('Provenance des pièces jointes indisponible :', err);
+    }
+
+    const itemHtml = (id) => {
       const idx = meta.id.indexOf(id);
       const fileName = idx !== -1 ? String(meta.fileName[idx]) : ('Fichier #' + id);
       const fileType = idx !== -1 ? String(meta.fileType[idx] || '') : '';
@@ -2112,7 +2215,25 @@
              <span>${escapeHtml(fileName)}</span>
            </a>`
         : `<a class="attachment-item" href="${url}" target="_blank" rel="noopener">📎 ${escapeHtml(fileName)}</a>`;
-    }).join('') + '</div>';
+    };
+
+    // Regroupement par action, en conservant l'ordre d'apparition des pièces jointes.
+    const groups = [];
+    const groupIndex = new Map();
+    validIds.forEach(id => {
+      const owner = ownerMap.get(id) || '';
+      if (!groupIndex.has(owner)) {
+        groupIndex.set(owner, groups.length);
+        groups.push({ owner, ids: [] });
+      }
+      groups[groupIndex.get(owner)].ids.push(id);
+    });
+
+    return groups.map(g => `
+      <div class="attachment-group">
+        ${g.owner ? `<div class="attachment-owner">📌 ${escapeHtml(g.owner)}</div>` : ''}
+        <div class="attachment-list">${g.ids.map(itemHtml).join('')}</div>
+      </div>`).join('');
   }
 
   // Résout une valeur brute de colonne Référence/RéférenceListe (un ou plusieurs
