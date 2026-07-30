@@ -1986,8 +1986,17 @@
   // Applique le format d'affichage Grist (pourcentage, nombre de décimales) à une valeur
   // numérique brute, en se basant sur les options de la colonne formule elle-même
   // (c'est elle qui porte le format d'affichage, ex. "70%" au lieu de "0.7").
+  // Grist encode les dates sous forme de tableau : ['d', secondes] pour une Date et
+  // ['D', secondes, fuseau] pour une DateTime. Sans ce déballage, Number()/String() sur
+  // le tableau produisent NaN puis un texte brut du type "d,1767657600".
+  function unwrapGristDate(raw) {
+    if (Array.isArray(raw) && (raw[0] === 'd' || raw[0] === 'D')) return raw[1];
+    return raw;
+  }
+
   function formatPreviewValue(raw, type, widgetOptionsStr) {
     if (raw === null || raw === undefined || raw === '') return '';
+    raw = unwrapGristDate(raw);
     if (type === 'Numeric' || type === 'Int') {
       const num = Number(raw);
       if (!Number.isNaN(num)) {
@@ -2012,6 +2021,7 @@
   // horaire qui ferait basculer sur le jour précédent/suivant.
   function formatDatePreviewValue(raw, type) {
     if (raw === null || raw === undefined || raw === '') return '';
+    raw = unwrapGristDate(raw);
     const num = Number(raw);
     if (Number.isNaN(num)) return String(raw);
     const isDateTime = type.startsWith('DateTime');
@@ -2057,6 +2067,8 @@
     if (type === 'Date' || type.startsWith('DateTime')) {
       return escapeHtml(formatDatePreviewValue(raw, type));
     }
+
+    raw = unwrapGristDate(raw);
 
     let items;
     if (Array.isArray(raw)) {
