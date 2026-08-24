@@ -124,9 +124,10 @@
   }
   /* pre-wrap : les sauts de ligne saisis dans les cellules Grist (typiquement la
      colonne Commentaire) sont restitués tels quels au lieu d'être aplatis en un
-     seul paragraphe. word-break : évite qu'un nom d'action très long ne déborde
-     de sa colonne maintenant que les largeurs sont fixes. */
-  .combined-table td { padding: 6px 8px; border: 1px solid var(--border); vertical-align: top; white-space: pre-wrap; overflow-wrap: break-word; }
+     seul paragraphe. Les mots ne sont jamais coupés en plein milieu (overflow-wrap:
+     normal) : les noms d'actions très longs sont rendus sécables uniquement à leurs
+     séparateurs (voir softBreakName dans renderGroup). */
+  .combined-table td { padding: 6px 8px; border: 1px solid var(--border); vertical-align: top; white-space: pre-wrap; overflow-wrap: normal; word-break: normal; }
   /* Colonne d'avancement : intitulé abrégé ("Avct"), valeurs centrées et non coupées. */
   .combined-table th.ct-col-avancement,
   .combined-table td.ct-col-avancement { white-space: nowrap; text-align: center; }
@@ -2384,10 +2385,10 @@
     // récupère l'espace des colonnes éventuellement masquées. Les poids sont normalisés
     // à 100 % pour rester valides quelle que soit la combinaison affichée.
     const colWeights = [
-      { key: 'nom', weight: 28 },
-      ...(showNature ? [{ key: 'nature', weight: 11 }] : []),
-      { key: 'avancement', weight: 8 },
-      ...(showPorteur ? [{ key: 'porteur', weight: 16 }] : []),
+      { key: 'nom', weight: 32 },
+      ...(showNature ? [{ key: 'nature', weight: 10 }] : []),
+      { key: 'avancement', weight: 7 },
+      ...(showPorteur ? [{ key: 'porteur', weight: 14 }] : []),
       { key: 'commentaire', weight: 37 },
     ];
     const totalWeight = colWeights.reduce((sum, c) => sum + c.weight, 0);
@@ -2397,9 +2398,14 @@
 
     function renderGroup(title, rows) {
       if (!rows.length) return '';
+      // Les noms d'actions ("2021_11_P_MEO1_Analyser RRF") sont un seul « mot » pour le
+      // navigateur, qui le couperait n'importe où pour le faire tenir. On insère un
+      // espace de largeur nulle (U+200B) après chaque séparateur : le retour à la ligne
+      // ne peut alors se produire qu'à ces endroits-là, jamais au milieu d'un mot.
+      const softBreakName = s => String(s).replace(/([_\-\/])/g, '$1\u200B');
       const rowsHtml = rows.map(r => `
         <tr>
-          <td>${escapeHtml(r.nom)}</td>
+          <td>${escapeHtml(softBreakName(r.nom))}</td>
           ${showNature ? `<td>${escapeHtml(r.nature)}</td>` : ''}
           <td class="ct-col-avancement">${escapeHtml(r.avancement)}</td>
           ${showPorteur ? `<td>${escapeHtml(r.porteur)}</td>` : ''}
