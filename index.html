@@ -119,7 +119,10 @@
     border: 1px solid var(--border);
     font-weight: 700;
   }
-  .combined-table td { padding: 6px 8px; border: 1px solid var(--border); vertical-align: top; }
+  /* pre-wrap : les sauts de ligne saisis dans les cellules Grist (typiquement la
+     colonne Commentaire) sont restitués tels quels au lieu d'être aplatis en un
+     seul paragraphe. */
+  .combined-table td { padding: 6px 8px; border: 1px solid var(--border); vertical-align: top; white-space: pre-wrap; }
   .combined-table td.ct-col-avancement { white-space: nowrap; }
   .attachment-list { display: flex; flex-direction: column; gap: 8px; }
   /* Regroupement des pièces jointes par action d'origine : un intitulé au-dessus
@@ -160,7 +163,7 @@
     font-size: 13px;
     font-weight: 600;
   }
-  .field-comment { font-size: 12px; color: var(--muted); margin: -8px 0 6px; line-height: 1.4; }
+  .field-comment { font-size: 12px; color: var(--muted); margin: -8px 0 6px; line-height: 1.4; white-space: pre-wrap; }
   .btn-attach {
     padding: 12px 20px;
     border-radius: 8px;
@@ -2071,15 +2074,32 @@
     raw = unwrapGristDate(raw);
 
     let items;
+    let isMultiline = false; // texte saisi sur plusieurs lignes dans la cellule Grist
     if (Array.isArray(raw)) {
       // Marqueur de liste Grist : ["L", v1, v2, ...] -> on retire le "L" de tête.
       const values = (raw[0] === 'L') ? raw.slice(1) : raw;
       items = values.map(v => String(v).trim()).filter(v => !isEmptyish(v));
     } else {
-      items = String(raw).split(',').map(s => s.trim()).filter(s => !isEmptyish(s));
+      // Normalisation des fins de ligne (Windows/Mac) avant toute analyse.
+      const text = String(raw).replace(/\r\n?/g, '\n');
+      if (text.includes('\n')) {
+        // La cellule contient de vrais sauts de ligne : c'est un texte rédigé, pas une
+        // énumération séparée par des virgules. On conserve les lignes telles quelles,
+        // dans leur ordre d'origine, sans découpage sur les virgules ni tri alphabétique.
+        isMultiline = true;
+        items = text.split('\n').map(s => s.trim()).filter(s => s !== '');
+      } else {
+        items = text.split(',').map(s => s.trim()).filter(s => !isEmptyish(s));
+      }
     }
     if (meoFilter) {
       items = items.filter(it => it.toLowerCase().includes('meo'));
+    }
+    if (isMultiline) {
+      // Rendu fidèle : les lignes sont réassemblées avec leurs sauts de ligne, que le
+      // style .formula-preview (white-space: pre-wrap) restitue à l'écran.
+      if (!items.length) return `<span class="formula-preview-placeholder">${escapeHtml(placeholder)}</span>`;
+      return escapeHtml(items.join('\n'));
     }
     items.sort((a, b) => a.localeCompare(b, 'fr', { sensitivity: 'base' }));
 
