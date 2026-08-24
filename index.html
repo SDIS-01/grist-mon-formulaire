@@ -123,7 +123,10 @@
      colonne Commentaire) sont restitués tels quels au lieu d'être aplatis en un
      seul paragraphe. */
   .combined-table td { padding: 6px 8px; border: 1px solid var(--border); vertical-align: top; white-space: pre-wrap; }
-  .combined-table td.ct-col-avancement { white-space: nowrap; }
+  /* Colonne d'avancement : intitulé abrégé ("Avct") et largeur réduite au strict
+     contenu (width:1% + nowrap), pour laisser la largeur restante au Commentaire. */
+  .combined-table th.ct-col-avancement,
+  .combined-table td.ct-col-avancement { white-space: nowrap; width: 1%; text-align: right; }
   .attachment-list { display: flex; flex-direction: column; gap: 8px; }
   /* Regroupement des pièces jointes par action d'origine : un intitulé au-dessus
      de chaque groupe indique à quelle action la ou les pièces appartiennent. */
@@ -2387,7 +2390,7 @@
         <div class="combined-table-group">
           <h4>${escapeHtml(title)}</h4>
           <table class="combined-table">
-            <thead><tr><th>Nom</th>${showNature ? '<th>Nature</th>' : ''}<th>Avancement</th>${showPorteur ? '<th>Porteur</th>' : ''}<th>Commentaire</th></tr></thead>
+            <thead><tr><th>Nom</th>${showNature ? '<th>Nature</th>' : ''}<th class="ct-col-avancement" title="Avancement">Avct</th>${showPorteur ? '<th>Porteur</th>' : ''}<th>Commentaire</th></tr></thead>
             <tbody>${rowsHtml}</tbody>
           </table>
         </div>`;
