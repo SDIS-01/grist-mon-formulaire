@@ -128,9 +128,10 @@
      normal) : les noms d'actions très longs sont rendus sécables uniquement à leurs
      séparateurs (voir softBreakName dans renderGroup). */
   .combined-table td { padding: 6px 8px; border: 1px solid var(--border); vertical-align: top; white-space: pre-wrap; overflow-wrap: normal; word-break: normal; }
-  /* Colonne d'avancement : intitulé abrégé ("Avct"), valeurs centrées et non coupées. */
+  /* Colonne d'avancement : intitulé abrégé ("Avct"), valeurs centrées et non coupées.
+     Padding horizontal réduit pour que "100 %" tienne dans une colonne étroite. */
   .combined-table th.ct-col-avancement,
-  .combined-table td.ct-col-avancement { white-space: nowrap; text-align: center; }
+  .combined-table td.ct-col-avancement { white-space: nowrap; text-align: center; padding-left: 3px; padding-right: 3px; }
   .attachment-list { display: flex; flex-direction: column; gap: 8px; }
   /* Regroupement des pièces jointes par action d'origine : un intitulé au-dessus
      de chaque groupe indique à quelle action la ou les pièces appartiennent. */
@@ -2363,7 +2364,9 @@
     const s = String(raw).trim();
     if (s.includes('%')) return s;
     const num = Number(s);
-    if (!Number.isNaN(num)) return Math.round(num * 100) + ' %';
+    // Espace insécable fine (U+202F) avant le % : typographie française correcte et
+    // légèrement moins large qu'une espace normale, dans une colonne étroite.
+    if (!Number.isNaN(num)) return Math.round(num * 100) + '\u202F%';
     return s;
   }
 
@@ -2385,10 +2388,10 @@
     // récupère l'espace des colonnes éventuellement masquées. Les poids sont normalisés
     // à 100 % pour rester valides quelle que soit la combinaison affichée.
     const colWeights = [
-      { key: 'nom', weight: 32 },
+      { key: 'nom', weight: 30 },
       ...(showNature ? [{ key: 'nature', weight: 10 }] : []),
-      { key: 'avancement', weight: 7 },
-      ...(showPorteur ? [{ key: 'porteur', weight: 14 }] : []),
+      { key: 'avancement', weight: 10 },
+      ...(showPorteur ? [{ key: 'porteur', weight: 13 }] : []),
       { key: 'commentaire', weight: 37 },
     ];
     const totalWeight = colWeights.reduce((sum, c) => sum + c.weight, 0);
