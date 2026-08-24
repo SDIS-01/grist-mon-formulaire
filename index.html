@@ -111,7 +111,10 @@
     letter-spacing: 0.02em;
     color: var(--accent-dark);
   }
-  .combined-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  /* table-layout: fixed + colgroup (voir renderGroup) : les deux tableaux (groupe 1 et
+     groupe MEO) utilisent exactement les mêmes largeurs de colonnes, donc restent
+     alignés verticalement au lieu de se dimensionner chacun sur son propre contenu. */
+  .combined-table { width: 100%; border-collapse: collapse; font-size: 13px; table-layout: fixed; }
   .combined-table th {
     text-align: left;
     padding: 6px 8px;
@@ -121,12 +124,12 @@
   }
   /* pre-wrap : les sauts de ligne saisis dans les cellules Grist (typiquement la
      colonne Commentaire) sont restitués tels quels au lieu d'être aplatis en un
-     seul paragraphe. */
-  .combined-table td { padding: 6px 8px; border: 1px solid var(--border); vertical-align: top; white-space: pre-wrap; }
-  /* Colonne d'avancement : intitulé abrégé ("Avct") et largeur réduite au strict
-     contenu (width:1% + nowrap), pour laisser la largeur restante au Commentaire. */
+     seul paragraphe. word-break : évite qu'un nom d'action très long ne déborde
+     de sa colonne maintenant que les largeurs sont fixes. */
+  .combined-table td { padding: 6px 8px; border: 1px solid var(--border); vertical-align: top; white-space: pre-wrap; overflow-wrap: break-word; }
+  /* Colonne d'avancement : intitulé abrégé ("Avct"), valeurs centrées et non coupées. */
   .combined-table th.ct-col-avancement,
-  .combined-table td.ct-col-avancement { white-space: nowrap; width: 1%; text-align: right; }
+  .combined-table td.ct-col-avancement { white-space: nowrap; text-align: center; }
   .attachment-list { display: flex; flex-direction: column; gap: 8px; }
   /* Regroupement des pièces jointes par action d'origine : un intitulé au-dessus
      de chaque groupe indique à quelle action la ou les pièces appartiennent. */
@@ -2376,6 +2379,22 @@
     const showNature = !!cfg.natureField;
     const showPorteur = !!cfg.porteurField;
 
+    // Largeurs de colonnes communes aux deux tableaux (groupe 1 et groupe MEO), calées
+    // sur la mise en page du premier : Nature/Avct restent étroites, le Commentaire
+    // récupère l'espace des colonnes éventuellement masquées. Les poids sont normalisés
+    // à 100 % pour rester valides quelle que soit la combinaison affichée.
+    const colWeights = [
+      { key: 'nom', weight: 28 },
+      ...(showNature ? [{ key: 'nature', weight: 11 }] : []),
+      { key: 'avancement', weight: 8 },
+      ...(showPorteur ? [{ key: 'porteur', weight: 16 }] : []),
+      { key: 'commentaire', weight: 37 },
+    ];
+    const totalWeight = colWeights.reduce((sum, c) => sum + c.weight, 0);
+    const colGroupHtml = '<colgroup>' + colWeights
+      .map(c => `<col style="width:${(c.weight / totalWeight * 100).toFixed(2)}%;" />`)
+      .join('') + '</colgroup>';
+
     function renderGroup(title, rows) {
       if (!rows.length) return '';
       const rowsHtml = rows.map(r => `
@@ -2390,6 +2409,7 @@
         <div class="combined-table-group">
           <h4>${escapeHtml(title)}</h4>
           <table class="combined-table">
+            ${colGroupHtml}
             <thead><tr><th>Nom</th>${showNature ? '<th>Nature</th>' : ''}<th class="ct-col-avancement" title="Avancement">Avct</th>${showPorteur ? '<th>Porteur</th>' : ''}<th>Commentaire</th></tr></thead>
             <tbody>${rowsHtml}</tbody>
           </table>
