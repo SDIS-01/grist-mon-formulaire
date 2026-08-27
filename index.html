@@ -1594,9 +1594,18 @@
     //       → requires: [] (ou omis) = TOUS les champs non-formule de ce
     //         sous-chapitre doivent être remplis.
     //
+    //   { within: 'Titre du sous-chapitre', requires: ['Libellé champ', ...] }
+    //       → la coupure tombe À L'INTÉRIEUR du sous-chapitre : seuls son titre et les
+    //         champs jusqu'au déclencheur inclus s'affichent ; la fin du bloc ET tout
+    //         ce qui suit restent masqués. À utiliser quand le champ déclencheur est
+    //         au milieu d'un bloc dont le reste ne doit pas être dévoilé d'avance.
+    //       → requires est obligatoire ici (une liste vide = étape ignorée).
+    //
     //   ['Libellé champ', ...]
     //       → forme historique : coupe juste après le(s) champ(s) cité(s), quelle
-    //         que soit leur position dans un sous-chapitre.
+    //         que soit leur position dans un sous-chapitre. Attention, le reliquat du
+    //         sous-chapitre se retrouve alors hors de son bloc repliable — préférer
+    //         'within' dans ce cas.
     //
     // Les titres et libellés sont comparés sans tenir compte de la casse, des
     // accents ni des espaces multiples : « Action MEO » = « action meo ».
@@ -1606,8 +1615,10 @@
       'Consultation & Saisie': [
         // 1. À l'ouverture : seul le sous-chapitre « Projet & Action » est visible.
         { after: 'Projet & Action', requires: ['Sélectionner Projet PEPS ou Action AV'] },
-        // 2. Le projet/action choisi déploie « Action MEO », puis « Tâche ».
-        { after: 'Action MEO', requires: ['Sélectionner Action MEO'] },
+        // 2. Le projet/action choisi dévoile le titre « Action MEO » et son seul champ
+        //    de sélection. Le reste du bloc et la suite attendent que ce champ soit
+        //    renseigné.
+        { within: 'Action MEO', requires: ['Sélectionner Action MEO'] },
       ],
     };
 
@@ -1627,9 +1638,10 @@
 
     // Ramène les deux écritures possibles d'une étape à une forme unique.
     function normalizeGateStage(stage) {
-      if (Array.isArray(stage)) return { afterSubsection: null, requires: stage.map(normLabel) };
+      if (Array.isArray(stage)) return { afterSubsection: null, withinSubsection: null, requires: stage.map(normLabel) };
       return {
         afterSubsection: stage.after ? normLabel(stage.after) : null,
+        withinSubsection: stage.within ? normLabel(stage.within) : null,
         requires: (stage.requires || []).map(normLabel),
       };
     }
@@ -1691,6 +1703,21 @@
     // éventuel segment "sans titre" avant le premier sous-chapitre, puis un segment par
     // sous-chapitre (avec son titre + tout ce qui suit jusqu'au sous-chapitre suivant).
     // Chaque segment de sous-chapitre est rendu dans un bloc repliable/dépliable.
+    // Enveloppe un contenu déjà rendu dans l'en-tête repliable d'un sous-chapitre.
+    // Isolée ici pour pouvoir être réutilisée par le blocage "within", qui a besoin
+    // d'injecter un contenu partiellement masqué à l'intérieur du bloc.
+    function renderSubsectionBlock(s, innerHtml) {
+      const color = s.color || '#1B7A3D';
+      const bodyId = 'subsecBody_' + s.id;
+      const isCollapsed = !!collapsedSubsections[s.id];
+      return `
+            <div class="form-subsection form-subsection-toggle${isCollapsed ? ' collapsed' : ''}" style="border-bottom-color:${color};" data-subsection-id="${s.id}" data-target="${bodyId}">
+              <h3 style="color:${color};"><span class="subsection-caret">▾</span> ${escapeHtml(s.title)}</h3>
+            </div>
+            <div class="form-subsection-body${isCollapsed ? ' collapsed' : ''}" id="${bodyId}">${innerHtml}</div>
+          `;
+    }
+
     async function renderFieldItems(items) {
       const groups = [];
       let current = { subsection: null, items: [] };
@@ -1708,16 +1735,7 @@
       for (const group of groups) {
         const innerHtml = await renderItemsList(group.items);
         if (group.subsection) {
-          const s = group.subsection;
-          const color = s.color || '#1B7A3D';
-          const bodyId = 'subsecBody_' + s.id;
-          const isCollapsed = !!collapsedSubsections[s.id];
-          parts.push(`
-            <div class="form-subsection form-subsection-toggle${isCollapsed ? ' collapsed' : ''}" style="border-bottom-color:${color};" data-subsection-id="${s.id}" data-target="${bodyId}">
-              <h3 style="color:${color};"><span class="subsection-caret">▾</span> ${escapeHtml(s.title)}</h3>
-            </div>
-            <div class="form-subsection-body${isCollapsed ? ' collapsed' : ''}" id="${bodyId}">${innerHtml}</div>
-          `);
+          parts.push(renderSubsectionBlock(group.subsection, innerHtml));
         } else if (innerHtml) {
           parts.push(innerHtml);
         }
@@ -1736,6 +1754,51 @@
       if (!stages || !stages.length) return renderFieldItems(items);
       const [stage, ...restStages] = stages;
       const spec = normalizeGateStage(stage);
+
+      // Mode "within" : la coupure tombe À L'INTÉRIEUR du sous-chapitre. Seuls le titre
+      // et les champs jusqu'au déclencheur inclus sont visibles ; la fin du bloc ET tout
+      // ce qui suit le sous-chapitre restent masqués. Deux blocs masqués distincts sont
+      // créés (un dans le corps du sous-chapitre, un après lui) mais ils dépendent des
+      // mêmes champs, donc ils se déploient ensemble.
+      if (spec.withinSubsection) {
+        const startIdx = items.findIndex(it =>
+          it.kind === 'subsection' && normLabel(it.subsection.title) === spec.withinSubsection);
+        if (startIdx === -1) return buildGatedPanelHtml(items, restStages);
+        let endIdx = items.length;
+        for (let i = startIdx + 1; i < items.length; i++) {
+          if (items[i].kind === 'subsection') { endIdx = i; break; }
+        }
+        const inner = items.slice(startIdx + 1, endIdx);
+        const matches = inner
+          .map((it, i) => ({ it, i }))
+          .filter(({ it }) => it.kind === 'field' && !it.col.isFormula &&
+            spec.requires.includes(normLabel(it.col.label)));
+        if (!matches.length) return buildGatedPanelHtml(items, restStages);
+
+        const cut = Math.max(...matches.map(m => m.i));
+        const gateColIds = matches.map(m => m.it.col.colId);
+        const innerVisible = inner.slice(0, cut + 1);
+        const innerRest = inner.slice(cut + 1);
+        const after = items.slice(endIdx);
+
+        let bodyHtml = await renderItemsList(innerVisible);
+        if (innerRest.length) {
+          const innerWrapperId = 'gatedFieldsWrapper_' + (gateWrapperCounter++);
+          gateGroups.push({ wrapperId: innerWrapperId, fieldColIds: gateColIds });
+          bodyHtml += `<div class="gated-fields-wrapper" id="${innerWrapperId}">${await renderItemsList(innerRest)}</div>`;
+        }
+
+        let html = await renderFieldItems(items.slice(0, startIdx)) +
+          renderSubsectionBlock(items[startIdx].subsection, bodyHtml);
+
+        if (after.length) {
+          const afterWrapperId = 'gatedFieldsWrapper_' + (gateWrapperCounter++);
+          gateGroups.push({ wrapperId: afterWrapperId, fieldColIds: gateColIds });
+          html += `<div class="gated-fields-wrapper" id="${afterWrapperId}">${await buildGatedPanelHtml(after, restStages)}</div>`;
+        }
+        return html;
+      }
+
       let cutIndex = -1;   // index du DERNIER item qui reste visible à cette étape
       let gateItems = [];  // champs à remplir pour déployer la suite
 
