@@ -594,6 +594,12 @@
   let fieldTabMap = {};       // colId -> id de l'onglet qui le contient (pour la validation)
   let fieldTabTitleMap = {};  // colId -> titre de l'onglet qui le contient (pour le filtre MEO)
   let activateTab = null;     // fonction (assignée dans renderForm) pour changer d'onglet actif
+
+  // Comparaison souple des titres de chapitres/sous-chapitres et des libellés de champs :
+  // casse, accents et espaces multiples ignorés, pour qu'un renommage cosmétique ne
+  // désactive pas silencieusement le blocage conditionnel ou le filtre MEO.
+  const normLabel = (s) => (s || '').toString().trim().toLowerCase()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, ' ');
   let comboOptionsCache = {}; // colId -> options triées disponibles pour le combobox
   let docTablesMeta = null;   // cache de _grist_Tables (toutes les tables du document)
   let dependencyInfo = {};    // colId enfant -> { parentColId, linkColId, targetTable }
@@ -1544,18 +1550,51 @@
     // Chaque chapitre devient un onglet. Les sous-chapitres et les liens restent à
     // l'intérieur de l'onglet courant (pas de nouvel onglet). Les champs placés avant
     // le premier chapitre (s'il y en a) forment un onglet "Général" implicite.
-    // Configuration du blocage conditionnel : pour chaque onglet listé ici, on définit
-    // une SUITE d'étapes séquentielles (chaque étape = un ou plusieurs champs). Dès que
-    // les champs d'une étape sont remplis, tout ce qui suit jusqu'à l'étape suivante se
-    // déploie — y compris le(s) champ(s) déclencheur(s) de l'étape suivante. C'est ce qui
-    // permet un déploiement progressif (ex. le projet révèle d'abord la sélection de
-    // l'action MEO, qui elle-même révèle ensuite les tâches).
+    // ════════════════════════════════════════════════════════════════════════════
+    // PARAMÉTRAGE DU DÉPLOIEMENT PROGRESSIF (blocage conditionnel)
+    // ════════════════════════════════════════════════════════════════════════════
+    // Pour chaque onglet (= chapitre), on décrit une SUITE d'étapes séquentielles.
+    // À l'ouverture, seul ce qui précède la 1re étape est visible ; chaque étape
+    // franchie déploie le bloc suivant, jusqu'à l'étape d'après. Deux écritures :
+    //
+    //   { after: 'Titre du sous-chapitre', requires: ['Libellé champ', ...] }
+    //       → tout ce qui suit CE sous-chapitre (titre du suivant compris) reste
+    //         masqué tant que les champs listés ne sont pas remplis. C'est la forme
+    //         à privilégier : le découpage suit les sous-chapitres, donc aucun bloc
+    //         ne se retrouve coupé en deux.
+    //       → requires: [] (ou omis) = TOUS les champs non-formule de ce
+    //         sous-chapitre doivent être remplis.
+    //
+    //   ['Libellé champ', ...]
+    //       → forme historique : coupe juste après le(s) champ(s) cité(s), quelle
+    //         que soit leur position dans un sous-chapitre.
+    //
+    // Les titres et libellés sont comparés sans tenir compte de la casse, des
+    // accents ni des espaces multiples : « Action MEO » = « action meo ».
+    // Un titre ou un libellé introuvable = étape simplement ignorée (rien n'est
+    // masqué à cause d'elle).
     const GATE_CONFIG = {
       'Consultation & Saisie': [
-        ['Sélectionner Projet PEPS ou Action AV'],
-        ['Sélectionner Action MEO'],
+        // 1. À l'ouverture : seul le sous-chapitre « Projet & Action » est visible.
+        { after: 'Projet & Action', requires: ['Sélectionner Projet PEPS ou Action AV'] },
+        // 2. Le projet/action choisi déploie « Action MEO ».
+        { after: 'Action MEO', requires: ['Sélectionner Action MEO'] },
+        // 3. L'action MEO choisie déploie « Tâche ».
+        //    requires vide = tous les champs de « Tâche » doivent être remplis pour
+        //    déployer « Information formulaire ». À restreindre à un ou deux
+        //    libellés précis si c'est trop strict.
+        { after: 'Tâche', requires: [] },
       ],
     };
+
+    // Ramène les deux écritures possibles d'une étape à une forme unique.
+    function normalizeGateStage(stage) {
+      if (Array.isArray(stage)) return { afterSubsection: null, requires: stage.map(normLabel) };
+      return {
+        afterSubsection: stage.after ? normLabel(stage.after) : null,
+        requires: (stage.requires || []).map(normLabel),
+      };
+    }
 
     const tabs = [];
     let currentTab = null;
@@ -1657,12 +1696,40 @@
     // normalement, sans blocage supplémentaire.
     async function buildGatedPanelHtml(items, stages) {
       if (!stages || !stages.length) return renderFieldItems(items);
-      const [stageFields, ...restStages] = stages;
-      const gateItems = items.filter(it => it.kind === 'field' && stageFields.includes((it.col.label || '').trim()));
-      if (!gateItems.length) return buildGatedPanelHtml(items, restStages);
-      const cutoffOrder = Math.max(...gateItems.map(it => it.order));
-      const visibleItems = items.filter(it => it.order <= cutoffOrder);
-      const restItems = items.filter(it => it.order > cutoffOrder);
+      const [stage, ...restStages] = stages;
+      const spec = normalizeGateStage(stage);
+      let cutIndex = -1;   // index du DERNIER item qui reste visible à cette étape
+      let gateItems = [];  // champs à remplir pour déployer la suite
+
+      if (spec.afterSubsection) {
+        // Découpage sur la frontière du sous-chapitre : la coupure tombe juste avant
+        // le titre du sous-chapitre suivant, donc aucun bloc n'est scindé.
+        const startIdx = items.findIndex(it =>
+          it.kind === 'subsection' && normLabel(it.subsection.title) === spec.afterSubsection);
+        if (startIdx === -1) return buildGatedPanelHtml(items, restStages);
+        let endIdx = items.length;
+        for (let i = startIdx + 1; i < items.length; i++) {
+          if (items[i].kind === 'subsection') { endIdx = i; break; }
+        }
+        cutIndex = endIdx - 1;
+        const inSub = items.slice(startIdx + 1, endIdx)
+          .filter(it => it.kind === 'field' && !it.col.isFormula);
+        gateItems = spec.requires.length
+          ? inSub.filter(it => spec.requires.includes(normLabel(it.col.label)))
+          : inSub;
+      } else {
+        // Forme historique : coupure juste après le(s) champ(s) déclencheur(s).
+        const matches = items
+          .map((it, i) => ({ it, i }))
+          .filter(({ it }) => it.kind === 'field' && spec.requires.includes(normLabel(it.col.label)));
+        if (!matches.length) return buildGatedPanelHtml(items, restStages);
+        cutIndex = Math.max(...matches.map(m => m.i));
+        gateItems = matches.map(m => m.it);
+      }
+
+      if (!gateItems.length || cutIndex >= items.length - 1) return buildGatedPanelHtml(items, restStages);
+      const visibleItems = items.slice(0, cutIndex + 1);
+      const restItems = items.slice(cutIndex + 1);
       const wrapperId = 'gatedFieldsWrapper_' + (gateWrapperCounter++);
       gateGroups.push({ wrapperId, fieldColIds: gateItems.map(it => it.col.colId) });
       const visibleHtml = await renderFieldItems(visibleItems);
@@ -1689,7 +1756,10 @@
         fieldTabTitleMap[it.col.colId] = tab.title || '';
       });
 
-      const gateStages = tab.title ? GATE_CONFIG[tab.title.trim()] : null;
+      const gateKey = tab.title
+        ? Object.keys(GATE_CONFIG).find(k => normLabel(k) === normLabel(tab.title))
+        : null;
+      const gateStages = gateKey ? GATE_CONFIG[gateKey] : null;
       const panelHtml = await buildGatedPanelHtml(tab.items, gateStages);
       tabPanelsHtml.push(`<div class="form-tab-panel${isActive ? ' active' : ''}" data-tab-id="${tab.id}">${panelHtml}</div>`);
     }
@@ -1991,7 +2061,7 @@
   function fieldRequiresMeoFilter(col) {
     if (!col || !col.label || !col.label.toLowerCase().includes('meo')) return false;
     const tabTitle = fieldTabTitleMap[col.colId];
-    return tabTitle === MEO_FILTER_TAB_TITLE;
+    return normLabel(tabTitle) === normLabel(MEO_FILTER_TAB_TITLE);
   }
 
   // Applique le format d'affichage Grist (pourcentage, nombre de décimales) à une valeur
