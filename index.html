@@ -1551,7 +1551,7 @@
     // permet un déploiement progressif (ex. le projet révèle d'abord la sélection de
     // l'action MEO, qui elle-même révèle ensuite les tâches).
     const GATE_CONFIG = {
-      'Projet & Action': [
+      'Consultation & Saisie': [
         ['Sélectionner Projet PEPS ou Action AV'],
         ['Sélectionner Action MEO'],
       ],
@@ -1986,8 +1986,8 @@
 
   // Un champ dont le libellé actuel contient "MEO" (insensible à la casse) ne doit
   // proposer/afficher que les valeurs dont le texte affiché contient lui aussi "MEO" —
-  // mais uniquement pour les champs de l'onglet "Projet & Action" (pas les autres onglets).
-  const MEO_FILTER_TAB_TITLE = 'Projet & Action';
+  // mais uniquement pour les champs de l'onglet "Consultation & Saisie" (pas les autres onglets).
+  const MEO_FILTER_TAB_TITLE = 'Consultation & Saisie';
   function fieldRequiresMeoFilter(col) {
     if (!col || !col.label || !col.label.toLowerCase().includes('meo')) return false;
     const tabTitle = fieldTabTitleMap[col.colId];
