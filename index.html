@@ -1613,8 +1613,9 @@
     // masqué à cause d'elle).
     const GATE_CONFIG = {
       'Consultation & Saisie': [
-        // 1. À l'ouverture : seul le sous-chapitre « Projet & Action » est visible.
-        { after: 'Projet & Action', requires: ['Sélectionner Projet PEPS ou Action AV'] },
+        // 1. À l'ouverture : seuls le titre « Projet & Action » et son champ de
+        //    sélection sont visibles. Le reste du bloc attend que ce champ soit rempli.
+        { within: 'Projet & Action', requires: ['Sélectionner Projet PEPS ou Action AV'] },
         // 2. Le projet/action choisi dévoile le titre « Action MEO » et son seul champ
         //    de sélection. Le reste du bloc et la suite attendent que ce champ soit
         //    renseigné.
