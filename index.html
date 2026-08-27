@@ -263,6 +263,8 @@
 
   /* ---------- Champs bloqués (onglet "Consulter et saisir") ---------- */
   .gated-fields-wrapper { display: flex; flex-direction: column; gap: 14px; }
+  /* Sous-chapitre toujours visible, repositionné sous le dernier bloc déployé. */
+  .floating-subsection { display: flex; flex-direction: column; gap: 14px; }
   .field-row-2col {
     display: grid;
     grid-template-columns: 1fr 1fr;
@@ -591,6 +593,8 @@
   let comboState = {};        // colId -> option sélectionnée (Ref) ou tableau (RefList)
   let gateGroups = [];        // groupes de blocage indépendants : [{ wrapperId, fieldColIds }]
   let gateWrapperCounter = 0; // compteur pour générer des id uniques de blocs repliés (plusieurs étapes possibles par onglet)
+  let floatingBlocks = [];    // sous-chapitres flottants : [{ id, tabId }] (voir FLOATING_SUBSECTIONS)
+  let floatBlockCounter = 0;  // compteur pour générer des id uniques de blocs flottants
   let fieldTabMap = {};       // colId -> id de l'onglet qui le contient (pour la validation)
   let fieldTabTitleMap = {};  // colId -> titre de l'onglet qui le contient (pour le filtre MEO)
   let activateTab = null;     // fonction (assignée dans renderForm) pour changer d'onglet actif
@@ -907,6 +911,31 @@
         return v !== null && v !== undefined && v !== '';
       });
       wrapper.style.display = allFilled ? '' : 'none';
+    });
+    repositionFloatingBlocks();
+  }
+
+  // Repositionne chaque sous-chapitre flottant à la fin du dernier bloc effectivement
+  // déployé de son onglet : on part du panneau et on descend tant qu'un bloc de champs
+  // bloqués enfant est visible. Le bloc suit ainsi le déploiement progressif au lieu de
+  // rester coincé en haut ou en bas du formulaire. appendChild() déplace le nœud sans
+  // le recréer : les valeurs saisies et les écouteurs d'événements sont préservés.
+  function repositionFloatingBlocks() {
+    floatingBlocks.forEach(fb => {
+      const block = document.getElementById(fb.id);
+      if (!block) return;
+      const panel = document.querySelector(`.form-tab-panel[data-tab-id="${fb.tabId}"]`);
+      if (!panel) return;
+      let container = panel;
+      for (;;) {
+        const child = Array.from(container.children).find(el =>
+          el.classList && el.classList.contains('gated-fields-wrapper') && el.style.display !== 'none');
+        if (!child) break;
+        container = child;
+      }
+      if (block.parentElement !== container || container.lastElementChild !== block) {
+        container.appendChild(block);
+      }
     });
   }
 
@@ -1577,14 +1606,23 @@
       'Consultation & Saisie': [
         // 1. À l'ouverture : seul le sous-chapitre « Projet & Action » est visible.
         { after: 'Projet & Action', requires: ['Sélectionner Projet PEPS ou Action AV'] },
-        // 2. Le projet/action choisi déploie « Action MEO ».
+        // 2. Le projet/action choisi déploie « Action MEO », puis « Tâche ».
         { after: 'Action MEO', requires: ['Sélectionner Action MEO'] },
-        // 3. L'action MEO choisie déploie « Tâche ».
-        //    requires vide = tous les champs de « Tâche » doivent être remplis pour
-        //    déployer « Information formulaire ». À restreindre à un ou deux
-        //    libellés précis si c'est trop strict.
-        { after: 'Tâche', requires: [] },
       ],
+    };
+
+    // ════════════════════════════════════════════════════════════════════════════
+    // SOUS-CHAPITRES FLOTTANTS (toujours visibles, poussés vers le bas)
+    // ════════════════════════════════════════════════════════════════════════════
+    // Ces sous-chapitres sont sortis du déploiement progressif : ils restent visibles
+    // dès l'ouverture de l'onglet et se repositionnent automatiquement sous le dernier
+    // bloc déployé. Concrètement, « Information formulaire » s'affiche d'abord juste
+    // sous « Projet & Action », puis descend sous « Action MEO », puis sous « Tâche »,
+    // au fur et à mesure que les champs déclencheurs sont renseignés.
+    // Le titre doit correspondre à celui saisi dans la configuration (comparaison
+    // souple : casse, accents et espaces multiples ignorés).
+    const FLOATING_SUBSECTIONS = {
+      'Consultation & Saisie': ['Information formulaire'],
     };
 
     // Ramène les deux écritures possibles d'une étape à une forme unique.
@@ -1739,6 +1777,8 @@
 
     gateGroups = [];
     gateWrapperCounter = 0;
+    floatingBlocks = [];
+    floatBlockCounter = 0;
     fieldTabMap = {};
     fieldTabTitleMap = {};
     const tabButtonsHtml = [];
@@ -1756,11 +1796,39 @@
         fieldTabTitleMap[it.col.colId] = tab.title || '';
       });
 
+      // Sous-chapitres flottants : on les retire du flux AVANT de calculer le blocage,
+      // pour qu'ils ne soient jamais enfermés dans un bloc masqué. Ils sont rendus à
+      // part, en fin de panneau, puis repositionnés dynamiquement par
+      // repositionFloatingBlocks() sous le dernier bloc effectivement déployé.
+      const floatKey = tab.title
+        ? Object.keys(FLOATING_SUBSECTIONS).find(k => normLabel(k) === normLabel(tab.title))
+        : null;
+      const floatTitles = floatKey ? FLOATING_SUBSECTIONS[floatKey].map(normLabel) : [];
+
+      const gatedItems = [];
+      const floatGroups = [];
+      let currentFloatGroup = null;
+      for (const it of tab.items) {
+        if (it.kind === 'subsection') {
+          currentFloatGroup = floatTitles.includes(normLabel(it.subsection.title)) ? { items: [] } : null;
+          if (currentFloatGroup) floatGroups.push(currentFloatGroup);
+        }
+        if (currentFloatGroup) currentFloatGroup.items.push(it);
+        else gatedItems.push(it);
+      }
+
       const gateKey = tab.title
         ? Object.keys(GATE_CONFIG).find(k => normLabel(k) === normLabel(tab.title))
         : null;
       const gateStages = gateKey ? GATE_CONFIG[gateKey] : null;
-      const panelHtml = await buildGatedPanelHtml(tab.items, gateStages);
+      let panelHtml = await buildGatedPanelHtml(gatedItems, gateStages);
+
+      for (const group of floatGroups) {
+        const floatId = 'floatingSubsection_' + (floatBlockCounter++);
+        floatingBlocks.push({ id: floatId, tabId: tab.id });
+        panelHtml += `<div class="floating-subsection" id="${floatId}">${await renderFieldItems(group.items)}</div>`;
+      }
+
       tabPanelsHtml.push(`<div class="form-tab-panel${isActive ? ' active' : ''}" data-tab-id="${tab.id}">${panelHtml}</div>`);
     }
 
