@@ -132,6 +132,13 @@
      Padding horizontal réduit pour que "100 %" tienne dans une colonne étroite. */
   .combined-table th.ct-col-avancement,
   .combined-table td.ct-col-avancement { white-space: nowrap; text-align: center; padding-left: 3px; padding-right: 3px; }
+  /* Colonne Porteur : sa largeur est calculée sur le contenu réel (voir
+     computePorteurPercent) pour que le patronyme le plus long tienne en entier. Le
+     break-word n'est qu'un filet de sécurité : il ne s'active que si un mot dépasse
+     encore la largeur maximale autorisée pour cette colonne, et évite alors un
+     débordement par-dessus la colonne Commentaire. */
+  .combined-table th.ct-col-porteur,
+  .combined-table td.ct-col-porteur { overflow-wrap: break-word; }
   .attachment-list { display: flex; flex-direction: column; gap: 8px; }
   /* Regroupement des pièces jointes par action d'origine : un intitulé au-dessus
      de chaque groupe indique à quelle action la ou les pièces appartiennent. */
@@ -2589,17 +2596,88 @@
     // sur la mise en page du premier : Nature/Avct restent étroites, le Commentaire
     // récupère l'espace des colonnes éventuellement masquées. Les poids sont normalisés
     // à 100 % pour rester valides quelle que soit la combinaison affichée.
-    const colWeights = [
-      { key: 'nom', weight: 30 },
-      ...(showNature ? [{ key: 'nature', weight: 10 }] : []),
-      { key: 'avancement', weight: 10 },
-      ...(showPorteur ? [{ key: 'porteur', weight: 13 }] : []),
-      { key: 'commentaire', weight: 37 },
-    ];
-    const totalWeight = colWeights.reduce((sum, c) => sum + c.weight, 0);
-    const colGroupHtml = '<colgroup>' + colWeights
-      .map(c => `<col style="width:${(c.weight / totalWeight * 100).toFixed(2)}%;" />`)
-      .join('') + '</colgroup>';
+    // Exception : la colonne Porteur est élargie si nécessaire pour que le nom affiché
+    // tienne en entier (les mots ne sont jamais coupés), l'élargissement étant prélevé
+    // sur le Commentaire puis sur le Nom, dans la limite de leurs largeurs minimales.
+    const PORTEUR_MIN_PCT = 13;   // largeur d'origine, jamais réduite en dessous
+    const PORTEUR_MAX_PCT = 30;   // plafond : au-delà, le tableau deviendrait illisible
+    const COMMENT_MIN_PCT = 20;
+    const NOM_MIN_PCT = 24;
+
+    // Mesure de texte via un canvas hors écran : pas d'élément ajouté au DOM, donc
+    // aucun reflow, et la mesure utilise exactement la police du tableau.
+    const measureCtx = document.createElement('canvas').getContext('2d');
+
+    // Les cellules ne coupent jamais un mot en plein milieu : la largeur réellement utile
+    // de la colonne Porteur est donc celle de son plus long « mot » (patronyme, prénom),
+    // et non celle du nom complet, qui peut passer à la ligne sur les espaces.
+    function computePorteurPercent(rows) {
+      const tableWidth = el.clientWidth;
+      // Onglet masqué (largeur 0) : on garde la largeur d'origine, le ResizeObserver
+      // ci-dessous recalculera dès que le tableau devient visible.
+      if (!showPorteur || !tableWidth) return PORTEUR_MIN_PCT;
+      const family = getComputedStyle(el).fontFamily || 'sans-serif';
+      measureCtx.font = `700 13px ${family}`;
+      let maxWordPx = measureCtx.measureText('Porteur').width; // l'en-tête est en gras
+      measureCtx.font = `400 13px ${family}`;
+      for (const r of rows) {
+        for (const word of String(r.porteur || '').split(/\s+/)) {
+          if (!word) continue;
+          const w = measureCtx.measureText(word).width;
+          if (w > maxWordPx) maxWordPx = w;
+        }
+      }
+      // 16 px de padding horizontal (6px 8px) + 2 px de bordures + 2 px de sécurité
+      // (arrondis de rendu selon le navigateur).
+      const pct = (maxWordPx + 20) / tableWidth * 100;
+      return Math.min(PORTEUR_MAX_PCT, Math.max(PORTEUR_MIN_PCT, pct));
+    }
+
+    function buildColGroupHtml(porteurPct) {
+      const colWeights = [
+        { key: 'nom', weight: 30 },
+        ...(showNature ? [{ key: 'nature', weight: 10 }] : []),
+        { key: 'avancement', weight: 10 },
+        ...(showPorteur ? [{ key: 'porteur', weight: PORTEUR_MIN_PCT }] : []),
+        { key: 'commentaire', weight: 37 },
+      ];
+      const totalWeight = colWeights.reduce((sum, c) => sum + c.weight, 0);
+      const pct = {};
+      colWeights.forEach(c => { pct[c.key] = c.weight / totalWeight * 100; });
+      if (showPorteur) {
+        let extra = Math.max(0, porteurPct - pct.porteur);
+        for (const [key, min] of [['commentaire', COMMENT_MIN_PCT], ['nom', NOM_MIN_PCT]]) {
+          if (extra <= 0) break;
+          const take = Math.min(extra, Math.max(0, pct[key] - min));
+          pct[key] -= take;
+          pct.porteur += take;
+          extra -= take;
+        }
+      }
+      return '<colgroup>' + colWeights
+        .map(c => `<col style="width:${pct[c.key].toFixed(2)}%;" />`)
+        .join('') + '</colgroup>';
+    }
+
+    let colGroupHtml = buildColGroupHtml(PORTEUR_MIN_PCT);
+
+    // Recalcule et réapplique les largeurs sur les tableaux déjà affichés, sans relire
+    // les données : utilisé quand la largeur du widget change (redimensionnement du
+    // panneau Grist, ou passage de l'onglet de masqué à visible).
+    let lastRenderedRows = [];
+    function refreshColWidths() {
+      const next = buildColGroupHtml(computePorteurPercent(lastRenderedRows));
+      if (next === colGroupHtml) return;
+      colGroupHtml = next;
+      el.querySelectorAll('table.combined-table > colgroup').forEach(cg => { cg.outerHTML = next; });
+    }
+    if (typeof ResizeObserver !== 'undefined') {
+      let pending = null;
+      new ResizeObserver(() => {
+        if (pending) cancelAnimationFrame(pending);
+        pending = requestAnimationFrame(() => { pending = null; refreshColWidths(); });
+      }).observe(el);
+    }
 
     function renderGroup(title, rows) {
       if (!rows.length) return '';
@@ -2613,7 +2691,7 @@
           <td>${escapeHtml(softBreakName(r.nom))}</td>
           ${showNature ? `<td>${escapeHtml(r.nature)}</td>` : ''}
           <td class="ct-col-avancement">${escapeHtml(r.avancement)}</td>
-          ${showPorteur ? `<td>${escapeHtml(r.porteur)}</td>` : ''}
+          ${showPorteur ? `<td class="ct-col-porteur">${escapeHtml(r.porteur)}</td>` : ''}
           <td>${escapeHtml(r.commentaire)}</td>
         </tr>`).join('');
       return `
@@ -2621,7 +2699,7 @@
           <h4>${escapeHtml(title)}</h4>
           <table class="combined-table">
             ${colGroupHtml}
-            <thead><tr><th>Nom</th>${showNature ? '<th>Nature</th>' : ''}<th class="ct-col-avancement" title="Avancement">Avct</th>${showPorteur ? '<th>Porteur</th>' : ''}<th>Commentaire</th></tr></thead>
+            <thead><tr><th>Nom</th>${showNature ? '<th>Nature</th>' : ''}<th class="ct-col-avancement" title="Avancement">Avct</th>${showPorteur ? '<th class="ct-col-porteur">Porteur</th>' : ''}<th>Commentaire</th></tr></thead>
             <tbody>${rowsHtml}</tbody>
           </table>
         </div>`;
@@ -2714,6 +2792,11 @@
         }
       }
       group2Rows.sort((a, b) => a.meoNum - b.meoNum);
+
+      // Largeur de la colonne Porteur calée sur les noms réellement affichés, tous
+      // groupes confondus : les deux tableaux conservent des colonnes alignées.
+      lastRenderedRows = group1Rows.concat(group2Rows);
+      colGroupHtml = buildColGroupHtml(computePorteurPercent(lastRenderedRows));
 
       el.innerHTML = renderGroup(cfg.group1Label, group1Rows) + renderGroup(cfg.group2Label, group2Rows);
     };
