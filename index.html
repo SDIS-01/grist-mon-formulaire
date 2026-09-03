@@ -7,6 +7,11 @@
 <script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
 <style>
   :root {
+    /* Le widget utilise une palette claire codée en dur. Sans cette déclaration,
+       un navigateur en mode sombre applique sa feuille de style par défaut aux
+       contrôles natifs (champs, listes, cases à cocher, sélecteurs de date) :
+       le texte devient clair sur nos fonds blancs, donc illisible. */
+    color-scheme: light;
     --accent: #0066B3;
     --accent-dark: #004C87;
     --bg: #f8fafc;
@@ -35,6 +40,7 @@
   .gear {
     border: 1px solid var(--border);
     background: white;
+    color: var(--text);
     border-radius: 8px;
     width: 32px; height: 32px;
     font-size: 15px;
@@ -66,6 +72,7 @@
     font-size: 14px;
     font-family: inherit;
     background: white;
+    color: var(--text);
   }
   input:disabled {
     background: #f1f5f9;
@@ -308,6 +315,7 @@
   button.secondary {
     padding: 9px 14px;
     background: white;
+    color: var(--text);
     border: 1px solid var(--border);
     border-radius: 8px;
     font-size: 14px;
