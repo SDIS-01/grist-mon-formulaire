@@ -3025,9 +3025,14 @@
     const tokenInfo = await grist.docApi.getAccessToken({ readOnly: false });
     const formData = new FormData();
     for (const file of fileList) formData.append('upload', file, file.name);
+    // L'en-tête X-Requested-With rend la requête "non simple" : le navigateur envoie
+    // d'abord un préflight OPTIONS, auquel Grist répond avec les en-têtes CORS attendus.
+    // Sans lui, le POST multipart est traité comme une soumission cross-origin suspecte
+    // (protection CSRF) et la réponse est bloquée → "Failed to fetch" côté widget.
     const resp = await fetch(`${tokenInfo.baseUrl}/attachments?auth=${tokenInfo.token}`, {
       method: 'POST',
       body: formData,
+      headers: { 'X-Requested-With': 'XMLHttpRequest' },
     });
     if (!resp.ok) throw new Error('Échec de l’envoi de la pièce jointe (' + resp.status + ')');
     const data = await resp.json();
