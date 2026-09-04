@@ -555,6 +555,16 @@
       </div>
     </div>
     <div class="cfg-block">
+      <label for="cfgMentionCol">✉️ Mention de collaborateurs (facultatif)</label>
+      <input type="text" id="cfgMentionCol" placeholder="Identifiant de la colonne RefList de mention, ex. Mentionne (vide = désactivé)" />
+      <input type="text" id="cfgMentionMailCol" placeholder="Colonne e-mail dans la table liée, ex. Mail (vide = détection automatique)" style="margin-top:8px;" />
+      <div class="cfg-col-name" style="margin-top:4px;">
+        Après validation, un bouton propose d'ouvrir un mail pré-rempli à destination des
+        collaborateurs sélectionnés. L'envoi reste manuel : le mail part de la messagerie de l'agent.
+        La colonne de mention doit être de type <strong>Liste de références</strong> vers la table des collaborateurs.
+      </div>
+    </div>
+    <div class="cfg-block">
       <label>📊 Tableaux combinés (regroupent une liste de références en un tableau)</label>
       <div class="cfg-col-name" style="margin-bottom:8px;">Chaque bloc ci-dessous définit un tableau indépendant : colonne "Liste des enregistrements" (RefList), puis les champs à afficher, lus directement sur chaque ligne d'origine — garantit qu'ils restent alignés. Le champ "Nature" est facultatif : laissez-le sur "— Aucun —" si vous ne voulez qu'un seul tableau sans répartition en 2 groupes.</div>
       <div id="cfgCombinedTablesList"></div>
@@ -1037,6 +1047,8 @@
     document.getElementById('cfgFormTitle').value = currentOptions.formTitle || '';
     document.getElementById('cfgFormSubtitle').value = currentOptions.formSubtitle || '';
     document.getElementById('cfgAttachFormUrl').value = currentOptions.attachFormUrl || '';
+    document.getElementById('cfgMentionCol').value = currentOptions.mentionCol || '';
+    document.getElementById('cfgMentionMailCol').value = currentOptions.mentionMailCol || '';
 
     // État de travail (en mémoire, pas encore enregistré) pour la liste des tableaux
     // combinés : part de la config actuelle (migrée si besoin depuis l'ancien réglage).
@@ -1459,6 +1471,13 @@
     const attachFormUrl = document.getElementById('cfgAttachFormUrl').value.trim();
     await grist.setOption('attachFormUrl', attachFormUrl || null);
     currentOptions.attachFormUrl = attachFormUrl || null;
+
+    const mentionCol = document.getElementById('cfgMentionCol').value.trim();
+    const mentionMailCol = document.getElementById('cfgMentionMailCol').value.trim();
+    await grist.setOption('mentionCol', mentionCol || null);
+    await grist.setOption('mentionMailCol', mentionMailCol || null);
+    currentOptions.mentionCol = mentionCol || null;
+    currentOptions.mentionMailCol = mentionMailCol || null;
 
     syncCombinedTablesDraftFromDOM();
     const combinedTables = combinedTablesDraft
@@ -3018,6 +3037,61 @@
     }[c]));
   }
 
+  // ---------- Mention de collaborateurs ----------
+  // Un widget tourne dans le navigateur : il ne peut pas envoyer de mail lui-même.
+  // On prépare donc un lien mailto: pré-rempli, que l'agent envoie depuis sa messagerie.
+
+  let pendingMentionText = ''; // version texte du message, pour le repli "copier"
+
+  // Récupère les adresses des collaborateurs sélectionnés dans la table référencée.
+  function getMentionMails(selected, mentionCol) {
+    const targetTable = mentionCol.type.split(':')[1];
+    const data = refOptionsCache[targetTable];
+    if (!data) return [];
+    let mailColId = currentOptions.mentionMailCol;
+    if (!mailColId) {
+      // Détection automatique : première colonne dont le nom évoque une adresse mail.
+      mailColId = Object.keys(data).find(k => /^(mail|mails|email|e_mail|courriel|adresse_mail)$/i.test(k));
+    }
+    if (!mailColId || !data[mailColId]) return [];
+    const mails = [];
+    (selected || []).forEach(opt => {
+      const idx = data.id.indexOf(parseInt(opt.value, 10));
+      if (idx === -1) return;
+      const raw = data[mailColId][idx];
+      if (raw && String(raw).includes('@')) mails.push(String(raw).trim());
+    });
+    return [...new Set(mails)];
+  }
+
+  // Résumé lisible de ce qui vient d'être saisi, repris tel qu'affiché dans le formulaire.
+  function buildMentionSummary() {
+    const lines = [];
+    mergedConfig.filter(c => c.included && !c.isFormula && c.type !== 'Attachments').forEach(col => {
+      let val = '';
+      if (col.type.startsWith('RefList:') || col.type === 'ChoiceList') {
+        val = (comboState[col.colId] || []).map(o => o.label).join(', ');
+      } else if (col.type.startsWith('Ref:') || col.type === 'Choice') {
+        const sel = comboState[col.colId];
+        val = sel ? sel.label : '';
+      } else {
+        const el = document.getElementById('f_' + col.colId);
+        if (!el) return;
+        val = col.type === 'Bool' ? (el.checked ? 'Oui' : 'Non') : el.value;
+      }
+      if (val && String(val).trim() !== '') lines.push(col.label + ' : ' + val);
+    });
+    return lines.join('\n');
+  }
+
+  // Les messageries tronquent les URL mailto trop longues : on borne le corps du message.
+  function buildMailtoHref(mails, subject, body) {
+    const safeBody = body.length > 1500 ? body.slice(0, 1500) + '\n[…]' : body;
+    return 'mailto:' + mails.join(',') +
+      '?subject=' + encodeURIComponent(subject) +
+      '&body=' + encodeURIComponent(safeBody);
+  }
+
   // ---------- Submit ----------
 
   async function uploadFiles(fileList) {
@@ -3203,8 +3277,56 @@
         }
       }
 
+      // Mention de collaborateurs : le mail est préparé à partir des personnes
+      // sélectionnées, mais reste à envoyer manuellement depuis la messagerie de l'agent.
+      let mentionBtnHtml = '';
+      pendingMentionText = '';
+      const mentionColId = currentOptions.mentionCol;
+      if (mentionColId) {
+        const mentionCol = mergedConfig.find(c => c.colId === mentionColId);
+        const selected = comboState[mentionColId] || [];
+        if (mentionCol && mentionCol.type.startsWith('RefList:') && selected.length) {
+          const mails = getMentionMails(selected, mentionCol);
+          if (mails.length) {
+            const titre = currentOptions.formTitle || targetTableId;
+            const subject = 'Vous avez été mentionné — ' + titre;
+            const body = 'Bonjour,\n\nVous avez été mentionné dans la saisie suivante :\n\n' +
+              buildMentionSummary() + '\n\n—\nMessage préparé automatiquement depuis Grist.';
+            const href = buildMailtoHref(mails, subject, body);
+            pendingMentionText = 'À : ' + mails.join(', ') + '\nObjet : ' + subject + '\n\n' + body;
+            const libelle = mails.length > 1 ? 'Prévenir les collaborateurs' : 'Prévenir le collaborateur';
+            mentionBtnHtml =
+              `<a class="btn-attach" id="mentionMailBtn" href="${escapeHtml(href)}" target="_blank" rel="noopener">✉️ ${libelle}</a>` +
+              '<button type="button" class="secondary" id="mentionCopyBtn">📋 Copier le message</button>';
+          } else {
+            console.warn('Mention : aucune adresse mail trouvée pour les collaborateurs sélectionnés.');
+          }
+        }
+      }
+
       const newRequestBtnHtml = '<div class="post-submit-actions"><button type="button" class="primary new-request-btn" id="newRequestBtn">🔄 Faire une nouvelle demande</button></div>';
-      attachArea.innerHTML = attachIframeHtml + newRequestBtnHtml;
+      attachArea.innerHTML = attachIframeHtml + mentionBtnHtml + newRequestBtnHtml;
+
+      // Repli si le navigateur bloque l'ouverture d'un mailto: depuis l'iframe du widget.
+      const mentionCopyBtn = document.getElementById('mentionCopyBtn');
+      if (mentionCopyBtn) {
+        mentionCopyBtn.addEventListener('click', async () => {
+          try {
+            await navigator.clipboard.writeText(pendingMentionText);
+          } catch (err) {
+            const ta = document.createElement('textarea');
+            ta.value = pendingMentionText;
+            ta.style.position = 'fixed';
+            ta.style.opacity = '0';
+            document.body.appendChild(ta);
+            ta.select();
+            try { document.execCommand('copy'); } catch (e) { console.error(e); }
+            document.body.removeChild(ta);
+          }
+          mentionCopyBtn.textContent = '✓ Copié';
+          setTimeout(() => { mentionCopyBtn.textContent = '📋 Copier le message'; }, 2500);
+        });
+      }
       document.getElementById('newRequestBtn').addEventListener('click', () => {
         fullFormReset(e.target);
         hideMsg();
