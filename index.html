@@ -197,6 +197,44 @@
     box-shadow: 0 2px 8px rgba(253,185,19,0.45);
   }
   .btn-attach:hover { background: #e6a70f; }
+  /* Sélecteur de pièces jointes du formulaire (cumul avant envoi) */
+  .btn-attach-add {
+    padding: 9px 14px;
+    border: 1px dashed var(--accent);
+    border-radius: 8px;
+    background: #fff;
+    color: var(--accent);
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .btn-attach-add:hover { background: #f8fafc; }
+  .attach-pending { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+  .attach-pending:empty { margin-top: 0; }
+  .attach-pending-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 8px 10px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: #f8fafc;
+    font-size: 13px;
+  }
+  .attach-pending-item span { overflow-wrap: anywhere; }
+  .attach-pending-size { color: var(--muted); font-size: 12px; white-space: nowrap; }
+  .attach-pending-remove {
+    border: none;
+    background: transparent;
+    color: var(--muted);
+    font-size: 15px;
+    line-height: 1;
+    cursor: pointer;
+    padding: 2px 4px;
+  }
+  .attach-pending-remove:hover { color: #dc2626; }
+  @media print { .btn-attach-add, .attach-pending-remove { display: none; } }
   .form-section {
     margin: 10px 0 -4px;
     padding-bottom: 6px;
@@ -616,6 +654,11 @@
   let refOptionsCache = {};
   let currentOptions = null;
   let comboState = {};        // colId -> option sélectionnée (Ref) ou tableau (RefList)
+  // Pièces jointes en attente d'envoi : colId -> tableau de File.
+  // Un <input type="file"> remplace sa propre liste à chaque sélection et son
+  // contenu est en lecture seule ; on cumule donc les fichiers ici pour permettre
+  // plusieurs passages successifs par le sélecteur avant de valider le formulaire.
+  let attachmentStore = {};
   let gateGroups = [];        // groupes de blocage indépendants : [{ wrapperId, fieldColIds }]
   let gateWrapperCounter = 0; // compteur pour générer des id uniques de blocs repliés (plusieurs étapes possibles par onglet)
   let floatingBlocks = [];    // sous-chapitres flottants : [{ id, tabId }] (voir FLOATING_SUBSECTIONS)
@@ -652,6 +695,65 @@
     if (e.key === 'Enter' && e.target.getAttribute('type') !== 'submit') {
       e.preventDefault();
     }
+  });
+
+  // ---------- Pièces jointes : cumul de plusieurs sélections successives ----------
+  // Écouteurs délégués sur #form (élément statique), le contenu du formulaire étant
+  // reconstruit à chaque renderForm().
+
+  function formatFileSize(bytes) {
+    if (!bytes && bytes !== 0) return '';
+    if (bytes < 1024) return bytes + ' o';
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(0) + ' Ko';
+    return (bytes / (1024 * 1024)).toFixed(1) + ' Mo';
+  }
+
+  // Affiche la liste des fichiers retenus pour une colonne, avec un bouton de retrait.
+  function renderPendingAttachments(colId) {
+    const zone = document.querySelector(`.attach-pending[data-col="${colId}"]`);
+    if (!zone) return;
+    const files = attachmentStore[colId] || [];
+    zone.innerHTML = files.map((f, i) => `
+      <div class="attach-pending-item">
+        <span>📎 ${escapeHtml(f.name)}</span>
+        <span class="attach-pending-size">${formatFileSize(f.size)}
+          <button type="button" class="attach-pending-remove" data-col="${escapeHtml(colId)}" data-idx="${i}" title="Retirer ce fichier">✕</button>
+        </span>
+      </div>`).join('');
+  }
+
+  document.getElementById('form').addEventListener('click', (e) => {
+    const addBtn = e.target.closest('.btn-attach-add');
+    if (addBtn) {
+      const input = document.getElementById('f_' + addBtn.dataset.col);
+      if (input) input.click();
+      return;
+    }
+    const rmBtn = e.target.closest('.attach-pending-remove');
+    if (rmBtn) {
+      const colId = rmBtn.dataset.col;
+      const idx = parseInt(rmBtn.dataset.idx, 10);
+      if (Array.isArray(attachmentStore[colId])) attachmentStore[colId].splice(idx, 1);
+      renderPendingAttachments(colId);
+    }
+  });
+
+  document.getElementById('form').addEventListener('change', (e) => {
+    const el = e.target;
+    if (!el.matches || !el.matches('input[type="file"][data-type="Attachments"]')) return;
+    const colId = el.dataset.col;
+    if (!Array.isArray(attachmentStore[colId])) attachmentStore[colId] = [];
+    const existing = attachmentStore[colId];
+    for (const file of el.files) {
+      // Doublons ignorés : même nom, même taille, même date de modification.
+      const dup = existing.some(f =>
+        f.name === file.name && f.size === file.size && f.lastModified === file.lastModified);
+      if (!dup) existing.push(file);
+    }
+    // Vider l'input est indispensable : sans cela, resélectionner le même fichier
+    // ne déclencherait plus d'événement "change".
+    el.value = '';
+    renderPendingAttachments(colId);
   });
 
   grist.ready({
@@ -1588,6 +1690,7 @@
     hideMsg();
     comboState = {};
     comboOptionsCache = {};
+    attachmentStore = {};
     attachmentOwnerMapCache = null; // la provenance des pièces jointes est recalculée à chaque rendu
 
     const included = config.filter(c => c.included).sort((a, b) => a.order - b.order);
@@ -2111,11 +2214,17 @@
     }
 
     if (type === 'Attachments') {
+      // L'input natif est masqué : on passe par un bouton qui l'ouvre, ce qui permet
+      // d'enchaîner plusieurs sélections successives, cumulées dans attachmentStore.
+      // L'attribut "required" natif est volontairement omis (l'input reste toujours
+      // vide) ; l'obligation est contrôlée par validateRequiredFields().
       return `
-        <div>
-          <label for="${id}">${col.label}${reqMark}</label>
+        <div class="attach-picker" data-col="${col.colId}">
+          <label>${col.label}${reqMark}</label>
           ${commentHtml(col)}
-          <input type="file" id="${id}" data-col="${col.colId}" data-type="${type}" multiple ${reqAttr} />
+          <input type="file" id="${id}" data-col="${col.colId}" data-type="${type}" multiple hidden />
+          <button type="button" class="btn-attach-add" data-col="${col.colId}">➕ Ajouter des pièces jointes</button>
+          <div class="attach-pending" data-col="${col.colId}"></div>
         </div>`;
     }
 
@@ -3024,6 +3133,13 @@
   function fullFormReset(formEl) {
     if (formEl) formEl.reset();
     resetAllCombos();
+    // Pièces jointes en attente : vider le cumul et les listes affichées.
+    Object.keys(attachmentStore).forEach(colId => {
+      attachmentStore[colId] = [];
+      const zone = document.querySelector(`.attach-pending[data-col="${colId}"]`);
+      if (zone) zone.innerHTML = '';
+    });
+    attachmentStore = {};
     // Propage la remise à zéro aux champs dépendants (cascade + aperçus de formule),
     // pour qu'ils redeviennent vides plutôt que de garder une ancienne valeur affichée.
     mergedConfig
@@ -3138,8 +3254,8 @@
       } else if (c.type === 'Bool') {
         isEmpty = false; // une case non cochée reste une réponse valide ("Non"), jamais bloquant
       } else if (c.type === 'Attachments') {
-        const el = document.getElementById('f_' + c.colId);
-        isEmpty = !el || !el.files || el.files.length === 0;
+        const files = attachmentStore[c.colId];
+        isEmpty = !Array.isArray(files) || files.length === 0;
       } else {
         const el = document.getElementById('f_' + c.colId);
         isEmpty = !el || el.value === '';
@@ -3185,7 +3301,7 @@
         }
 
         if (type === 'Attachments') {
-          value = await uploadFiles(el.files);
+          value = await uploadFiles(attachmentStore[col.colId] || []);
           if (value !== null) fields[col.colId] = value;
           continue;
         }
