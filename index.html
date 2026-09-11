@@ -484,6 +484,20 @@
   }
   .combo-option:hover, .combo-option:active { background: #f1f5f9; }
   .combo-empty { padding: 12px; font-size: 13px; color: var(--muted); }
+  /* Bascule utilisateur en tête de liste : les projets archivés sont exclus par
+     défaut, cette ligne permet de les rappeler ponctuellement. */
+  .combo-archives {
+    display: flex; align-items: center; gap: 8px; cursor: pointer;
+    padding: 9px 12px; font-size: 12.5px; color: var(--muted);
+    border-bottom: 1px solid #e5e7eb; background: #fafbfc;
+    position: sticky; top: 0; z-index: 1;
+  }
+  .combo-archives:hover { background: #f1f5f9; }
+  .combo-archives input { width: auto; margin: 0; flex: 0 0 auto; pointer-events: none; }
+  .combo-option .opt-archive {
+    margin-left: 6px; font-size: 11px; color: var(--muted);
+    border: 1px dashed #c3cad3; border-radius: 4px; padding: 0 5px;
+  }
   .combo-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
   .combo-tag {
     display: flex; align-items: center; gap: 6px;
@@ -2289,6 +2303,16 @@
       </div>`;
   }
 
+  // Colonne d'archivage portée par Liste_PEPS_AV (case à cocher renseignée dans
+  // Grist) et recopiée en formule dans les tables filles. Si la table visée par
+  // une liste déroulante ne possède pas cette colonne, rien n'est filtré.
+  const COL_ARCHIVE = 'Archive_Projet';
+  function estValeurCochee(v) {
+    if (v === true) return true;
+    if (v === false || v === null || v === undefined || v === '') return false;
+    return /^(true|1|oui|vrai|x)$/i.test(String(v).trim());
+  }
+
   async function getRefOptions(col) {
     const targetTable = col.type.split(':')[1];
     if (!refOptionsCache[targetTable]) {
@@ -2320,6 +2344,10 @@
         label = `#${data.id[i]}`;
       }
       const opt = { value: data.id[i], label, isMeo: label.toLowerCase().includes('meo') };
+      // Projet archivé côté Grist : l'option reste construite, mais elle n'est
+      // proposée que si l'utilisateur coche « Inclure les projets archivés ».
+      // Table cible dépourvue de la colonne : aucune option n'est marquée.
+      if (data[COL_ARCHIVE]) opt.isArchive = estValeurCochee(data[COL_ARCHIVE][i]);
       if (linkColId && data[linkColId]) {
         opt.filterRaw = data[linkColId][i];
       }
@@ -2954,6 +2982,9 @@
     const tagsEl = isList ? document.querySelector(`.combo-tags[data-col="${colId}"]`) : null;
 
     comboState[colId] = isList ? [] : null;
+    // Décoché à l'ouverture : chaque champ garde son propre réglage, le temps
+    // de la saisie en cours.
+    let inclureArchives = false;
 
     // Sous-ensemble des options actuellement disponibles compte tenu du champ parent. Par
     // défaut, si le parent n'a pas encore de valeur, on montre tout, sans filtrer — sauf
@@ -2973,11 +3004,30 @@
           avail = avail.filter(o => o.filterRaw !== undefined && o.filterRaw !== null && String(o.filterRaw) === String(parentValue));
         }
       }
+      // Les projets archivés sortent de la liste, sauf s'ils sont réclamés ou
+      // s'ils sont déjà retenus sur cet enregistrement : une valeur enregistrée
+      // avant l'archivage ne doit pas disparaître du champ en silence. Ce filtre
+      // passe avant celui sur les MEO, qui sort de la fonction par anticipation.
+      if (!inclureArchives) avail = avail.filter(o => !o.isArchive || isSelected(o));
       if (fieldRequiresMeoFilter(col)) {
         const meoOnly = avail.filter(o => o.isMeo);
         if (meoOnly.length) return meoOnly;
       }
       return avail;
+    }
+
+    // Nombre de projets archivés que la case permettrait de rappeler, compte tenu
+    // des autres filtres en vigueur (cascade, MEO).
+    function nbArchivesMasquees() {
+      if (inclureArchives) return 0;
+      let base = options;
+      if (dep) {
+        const parentValue = getFieldRawValue(dep.parentColId);
+        const parentEmpty = parentValue === null || parentValue === undefined || parentValue === '';
+        if (parentEmpty) { if (col.requireParentValue) return 0; }
+        else base = base.filter(o => o.filterRaw !== undefined && o.filterRaw !== null && String(o.filterRaw) === String(parentValue));
+      }
+      return base.filter(o => o.isArchive && !isSelected(o)).length;
     }
 
     function isSelected(opt) {
@@ -3036,21 +3086,46 @@
       const filtered = avail.filter(o =>
         o.label.toLowerCase().includes(q) && !(isList && isSelected(o))
       );
+      // Ligne de tête : proposée dès qu'il existe des archives à rappeler, ou
+      // tant que la case reste cochée, pour pouvoir revenir en arrière.
+      const nbMasquees = nbArchivesMasquees();
+      const teteHtml = (inclureArchives || nbMasquees)
+        ? `<label class="combo-archives"><input type="checkbox" class="combo-archives-case"${inclureArchives ? ' checked' : ''} />
+           Inclure les projets archivés${nbMasquees ? ` (${nbMasquees})` : ''}</label>`
+        : '';
+      const brancherTete = () => {
+        const case_ = listEl.querySelector('.combo-archives-case');
+        if (!case_) return;
+        // mousedown : le clic ne doit pas faire perdre le focus au champ, ce qui
+        // refermerait la liste avant la bascule.
+        const bascule = (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          inclureArchives = !inclureArchives;
+          renderList(input.value);
+        };
+        // La case elle-même est neutralisée en CSS (pointer-events) : tout passe
+        // par le libellé, un seul écouteur, donc une seule bascule par clic.
+        case_.parentElement.addEventListener('mousedown', bascule);
+      };
       if (!filtered.length) {
         const parentValue = dep ? getFieldRawValue(dep.parentColId) : null;
         const parentEmpty = parentValue === null || parentValue === undefined || parentValue === '';
         if (dep && col.requireParentValue && parentEmpty) {
-          listEl.innerHTML = '<div class="combo-empty">Sélectionnez d\'abord le champ précédent.</div>';
+          listEl.innerHTML = teteHtml + '<div class="combo-empty">Sélectionnez d\'abord le champ précédent.</div>';
         } else if (dep && !parentEmpty) {
           const withLink = options.filter(o => o.filterRaw !== undefined && o.filterRaw !== null).length;
-          listEl.innerHTML = `<div class="combo-empty">Aucune ligne liée à ce choix.<br>Diagnostic : valeur comparée = "${escapeHtml(String(parentValue))}" · ${withLink} ligne(s) sur ${options.length} ont une colonne de liaison renseignée dans ${escapeHtml(dep.targetTable)}.</div>`;
+          listEl.innerHTML = teteHtml + `<div class="combo-empty">Aucune ligne liée à ce choix.<br>Diagnostic : valeur comparée = "${escapeHtml(String(parentValue))}" · ${withLink} ligne(s) sur ${options.length} ont une colonne de liaison renseignée dans ${escapeHtml(dep.targetTable)}.</div>`;
         } else {
-          listEl.innerHTML = '<div class="combo-empty">Aucun résultat</div>';
+          listEl.innerHTML = teteHtml + '<div class="combo-empty">Aucun résultat</div>';
         }
+        brancherTete();
       } else {
-        listEl.innerHTML = filtered.map(o =>
-          `<div class="combo-option" data-value="${o.value}">${escapeHtml(o.label)}</div>`
+        listEl.innerHTML = teteHtml + filtered.map(o =>
+          `<div class="combo-option" data-value="${o.value}">${escapeHtml(o.label)}` +
+          `${o.isArchive ? '<span class="opt-archive">archivé</span>' : ''}</div>`
         ).join('');
+        brancherTete();
         listEl.querySelectorAll('.combo-option').forEach(el => {
           el.addEventListener('mousedown', (e) => {
             e.preventDefault(); // garde le focus pour que le clic s'enregistre (utile aussi au tactile)
