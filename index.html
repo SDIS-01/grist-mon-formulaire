@@ -440,6 +440,7 @@
 
   /* Combobox recherche (colonnes Référence) */
   .combo { position: relative; }
+  .combo-input.libre { border-style: dashed; border-color: #F79646; background: #FDEEE1; }
   .combo-input { font-size: 16px; padding-right: 34px; } /* évite le zoom auto sur iOS ; place réservée au bouton d'effacement */
   .combo-clear {
     display: none;
@@ -2669,6 +2670,7 @@
 
     const ids = Array.isArray(rawValue) ? (rawValue[0] === 'L' ? rawValue.slice(1) : rawValue) : [rawValue];
     const labels = ids.map(id => {
+      if (typeof id === 'string') return id; // nom saisi librement (référence invalide)
       const idx = data.id.indexOf(id);
       if (idx === -1) return '#' + id;
       return displayColId && data[displayColId] ? String(data[displayColId][idx]) : '#' + id;
@@ -2969,6 +2971,12 @@
     rebuild();
   }
 
+  // Saisie libre réservée aux Références simples vers la table des collaborateurs.
+  function estChampCollabLibre(col) {
+    if (!col || !col.type || !col.type.startsWith('Ref:')) return false;
+    return /collab/i.test(col.type.split(':')[1] || '');
+  }
+
   function setupCombobox(col, isList) {
     const colId = col.colId;
     const options = comboOptionsCache[colId] || [];
@@ -2982,6 +2990,7 @@
     const tagsEl = isList ? document.querySelector(`.combo-tags[data-col="${colId}"]`) : null;
 
     comboState[colId] = isList ? [] : null;
+    const saisieLibre = estChampCollabLibre(col);
     // Décoché à l'ouverture : chaque champ garde son propre réglage, le temps
     // de la saisie en cours.
     let inclureArchives = false;
@@ -3058,6 +3067,8 @@
         } else {
           comboState[colId] = null;
           input.value = '';
+          input.classList.remove('libre');
+          input.title = '';
         }
         updateProxy();
         notifyDependents(colId);
@@ -3140,6 +3151,8 @@
             } else {
               comboState[colId] = opt;
               input.value = opt.label;
+              input.classList.remove('libre');
+              input.title = '';
               listEl.classList.remove('open');
             }
             updateProxy();
@@ -3157,8 +3170,48 @@
         updateProxy();
         notifyDependents(colId);
       }
+      if (saisieLibre) marquerLibre(input.value.trim() !== '' && !trouverOption(input.value));
       renderList(input.value);
     });
+
+    // Champ collaborateur : on peut garder un nom absent de la table.
+    // Correspondance exacte d'abord, puis unique correspondance partielle
+    // (« nevoret » suffit s'il n'y a qu'une personne) ; sinon nom libre.
+    function plier(t) {
+      return String(t || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+        .toLowerCase().replace(/\s+/g, ' ').trim();
+    }
+    function trouverOption(texte) {
+      const q = plier(texte);
+      if (!q) return null;
+      const avail = getAvailableOptions();
+      const exact = avail.find(o => plier(o.label) === q);
+      if (exact) return exact;
+      const partiels = avail.filter(o => plier(o.label).includes(q));
+      return partiels.length === 1 ? partiels[0] : null;
+    }
+    function marquerLibre(libre) {
+      input.classList.toggle('libre', libre);
+      input.title = libre ? 'Nom saisi manuellement : absent de la table Collaborateur' : '';
+    }
+    if (saisieLibre) {
+      input.addEventListener('blur', () => {
+        const texte = input.value.replace(/\s+/g, ' ').trim();
+        if (comboState[colId] && !comboState[colId].libre) { marquerLibre(false); return; }
+        if (!texte) {
+          if (comboState[colId]) { comboState[colId] = null; updateProxy(); notifyDependents(colId); }
+          marquerLibre(false);
+          return;
+        }
+        const opt = trouverOption(texte);
+        comboState[colId] = opt || { value: texte, label: texte, libre: true };
+        input.value = comboState[colId].label;
+        marquerLibre(!opt);
+        listEl.classList.remove('open');
+        updateProxy();
+        notifyDependents(colId);
+      });
+    }
 
     // Si ce champ dépend d'un parent, on l'enregistre pour être rafraîchi/invalidé
     // dès que la valeur du parent change.
@@ -3169,7 +3222,7 @@
           const before = comboState[colId].length;
           comboState[colId] = comboState[colId].filter(o => avail.some(a => String(a.value) === String(o.value)));
           if (comboState[colId].length !== before) renderTags();
-        } else if (comboState[colId] && !avail.some(o => String(o.value) === String(comboState[colId].value))) {
+        } else if (comboState[colId] && !comboState[colId].libre && !avail.some(o => String(o.value) === String(comboState[colId].value))) {
           comboState[colId] = null;
           input.value = '';
         }
@@ -3191,7 +3244,10 @@
         comboState[col.colId] = isList ? [] : null;
         const wrapper = document.querySelector(`.combo[data-col="${col.colId}"]`);
         if (wrapper) {
-          wrapper.querySelector('.combo-input').value = '';
+          const champ = wrapper.querySelector('.combo-input');
+          champ.value = '';
+          champ.classList.remove('libre');
+          champ.title = '';
           wrapper.querySelector('.combo-proxy').value = '';
           const clearBtn = wrapper.querySelector('.combo-clear');
           if (clearBtn) clearBtn.classList.remove('visible');
@@ -3405,7 +3461,8 @@
         if (type.startsWith('Ref:')) {
           const selected = comboState[col.colId];
           if (!selected) continue;
-          fields[col.colId] = parseInt(selected.value, 10);
+          // nom absent de la table : Grist le garde en référence invalide (en rouge)
+          fields[col.colId] = selected.libre ? selected.label : parseInt(selected.value, 10);
           continue;
         }
 
